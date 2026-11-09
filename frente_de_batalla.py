@@ -7,15 +7,17 @@ FRENTE DE BATALLA - shooter 3D en primera persona (Python + Ursina)
 W A S D mover | Shift correr | Espacio saltar | Mouse apuntar
 Clic disparar | Clic derecho zoom | 1-4 o rueda: cambiar arma
 R recargar | G granada | Esc o P pausa
+Las opciones y el récord se guardan en frente_de_batalla.json (carpeta de usuario).
 """
+import json
 import math
+import os
 import random
 
 from ursina import *
 from ursina.prefabs.first_person_controller import FirstPersonController
 
 C = color.hex          # C('#ff9a30') -> color
-FOV = 90
 
 # ------------------------------------------------------------------ armas
 # Para agregar un arma nueva: sumá una línea a esta lista.
@@ -30,6 +32,14 @@ ARMAS = [
 class S:
     """Todo el estado del juego en un solo lugar."""
     modo = 'menu'                 # menu | juego | pausa | fin
+    panel = 'principal'           # principal | armas | config
+    # opciones que se guardan en el disco
+    fov = 90
+    sens = 40
+    dif = 1
+    arma_inicial = 0
+    record_ola = 0
+    record_bajas = 0
     hp = 100.0
     ola = 0
     bajas = 0
@@ -50,6 +60,37 @@ class S:
     marcador = 0.0
     enemigos = []
     recogibles = []
+
+
+# ------------------------------------------------------------------ opciones guardadas
+RUTA = os.path.join(os.path.expanduser('~'), 'frente_de_batalla.json')
+CAMPOS = ('fov', 'sens', 'dif', 'arma_inicial', 'record_ola', 'record_bajas')
+
+
+def guardar():
+    try:
+        with open(RUTA, 'w') as f:
+            json.dump({k: getattr(S, k) for k in CAMPOS}, f)
+    except Exception:
+        pass
+
+
+def cargar():
+    try:
+        with open(RUTA) as f:
+            datos = json.load(f)
+        for k in CAMPOS:
+            if k in datos:
+                setattr(S, k, int(datos[k]))
+    except Exception:
+        pass
+    S.fov = max(70, min(110, S.fov))
+    S.sens = max(10, min(100, S.sens))
+    S.dif = max(0, min(2, S.dif))
+    S.arma_inicial = max(0, min(len(ARMAS) - 1, S.arma_inicial))
+
+
+cargar()
 
 
 # ------------------------------------------------------------------ ventana y luces
@@ -196,9 +237,9 @@ def construir_mundo():
 jugador = FirstPersonController(position=(0, .1, 0))
 jugador.jump_height = 1.2
 if hasattr(jugador, 'cursor'):
-    destroy(jugador.cursor)
+    jugador.cursor.alpha = 0      # la mira propia es el '+'; el controlador necesita que este objeto exista
 camera.clip_plane_near = .05
-camera.fov = FOV
+camera.fov = S.fov
 
 arma = Entity(parent=camera, model='cube', position=(.25, -.25, .7))
 fogonazo = Entity(parent=arma, model='cube', color=C('#ffd070'), scale=(2, 2, .25), z=.55, enabled=False, **UI)
@@ -243,13 +284,16 @@ texto(hud, '+', (0, 0), 2)
 marca = texto(hud, 'x', (0, 0), 2, '#c4452d')
 
 fondo = Entity(parent=menu, model='quad', scale=(2, 1.2), z=1, color=C('#0d0a07'), **UI)
-fondo.alpha = .8
-m_titulo = texto(menu, '', (0, .22), 4, ORO)
-m_sub = texto(menu, '', (0, .08), 1.5)
-m_ctl = texto(menu, 'W A S D mover   Mouse apuntar   Clic disparar   Clic derecho zoom\n'
-                    '1 a 4 o rueda: arma   R recargar   G granada   Shift correr   Espacio saltar   Esc pausa',
-              (0, -.1), 1, '#b9ab8c')
-m_boton = texto(menu, '', (0, -.25), 1.8, ORO)
+fondo.alpha = .85
+
+DESC = ['Automático. Equilibrado.', 'Semiautomática. Rápida y precisa.',
+        '9 perdigones. Letal de cerca.', 'Un tiro, una baja. Clic derecho: zoom.']
+DIFICULTADES = [('Fácil', .6), ('Normal', 1.0), ('Difícil', 1.5)]   # (nombre, daño que te hacen)
+
+
+def boton(padre, txt, pos, accion, ancho=.42, alto=.075):
+    return Button(parent=padre, text=txt, position=pos, scale=(ancho, alto), color=C('#3a2f22'),
+                  highlight_color=C('#6a4f2a'), pressed_color=C('#8a6a30'), on_click=accion, **UI)
 
 
 def mensaje(txt):
@@ -257,18 +301,143 @@ def mensaje(txt):
     S.t_msg = 1.8
 
 
-def abrir_menu(titulo, sub, boton):
+def limpiar():
+    for e in S.enemigos + S.recogibles:
+        destroy(e)
+    S.enemigos.clear()
+    S.recogibles.clear()
+
+
+def accion_jugar():
+    if S.modo == 'pausa':
+        entrar_al_juego()
+    else:
+        nueva_partida()
+
+
+def accion_salir():
+    if S.modo == 'menu':
+        application.quit()
+    else:
+        limpiar()
+        S.modo = 'menu'
+        abrir_menu(*TEXTOS_INICIO)
+
+
+TEXTOS_INICIO = ('Frente de Batalla', 'Un soldado, una línea, sin refuerzos.\nResistí las oleadas.', 'JUGAR', 'SALIR')
+
+# --- panel principal
+p_principal = Entity(parent=menu)
+p_armas = Entity(parent=menu)
+p_config = Entity(parent=menu)
+paneles = {'principal': p_principal, 'armas': p_armas, 'config': p_config}
+
+
+def mostrar_panel(nombre):
+    S.panel = nombre
+    for n, pn in paneles.items():
+        pn.enabled = (n == nombre)
+
+
+m_titulo = texto(p_principal, '', (0, .32), 4, ORO)
+m_sub = texto(p_principal, '', (0, .2), 1.4)
+b_jugar = boton(p_principal, '', (0, .06), accion_jugar)
+boton(p_principal, 'ELEGIR ARMA', (0, -.04), lambda: mostrar_panel('armas'))
+boton(p_principal, 'CONFIGURACIÓN', (0, -.14), lambda: mostrar_panel('config'))
+b_salir = boton(p_principal, '', (0, -.24), accion_salir)
+m_record = texto(p_principal, '', (0, -.33), 1.1, ORO)
+texto(p_principal, 'W A S D mover   Mouse apuntar   Clic disparar   Clic derecho zoom\n'
+                   '1 a 4 o rueda: arma   R recargar   G granada   Shift correr   Espacio saltar   Esc pausa',
+      (0, -.42), .9, '#b9ab8c')
+
+# --- panel de armas
+texto(p_armas, 'Elegí tu arma', (0, .32), 3, ORO)
+b_armas = []
+
+
+def elegir_arma(i):
+    S.arma_inicial = i
+    if S.modo == 'pausa':
+        cambiar_arma(i)
+    refrescar_armas()
+    guardar()
+
+
+def refrescar_armas():
+    for i, b in enumerate(b_armas):
+        b.text = f'[ {ARMAS[i]["n"]} ]' if i == S.arma_inicial else ARMAS[i]['n']
+    w = ARMAS[S.arma_inicial]
+    poner(m_stats, f'{w["n"]}\n{DESC[S.arma_inicial]}\n\n'
+                   f'Daño {w["dano"]}   Cargador {w["cargador"]}   Munición de reserva {w["reserva"]}   Recarga {w["recarga"]} s')
+
+
+for i, w in enumerate(ARMAS):
+    b_armas.append(boton(p_armas, w['n'], (-.57 + i * .38, .15), lambda i=i: elegir_arma(i), .35, .12))
+m_stats = texto(p_armas, '', (0, -.05), 1.3)
+boton(p_armas, 'VOLVER', (0, -.3), lambda: mostrar_panel('principal'))
+
+# --- panel de configuración
+texto(p_config, 'Configuración', (0, .32), 3, ORO)
+
+
+def fila(y, nombre, menos, mas):
+    texto(p_config, nombre, (-.5, y), 1.4, origen=(-.5, 0))
+    boton(p_config, '-', (.15, y), menos, .07, .07)
+    valor = texto(p_config, '', (.35, y), 1.4)
+    boton(p_config, '+', (.55, y), mas, .07, .07)
+    return valor
+
+
+def cambiar(campo, paso):
+    if campo == 'sens':
+        S.sens = max(10, min(100, S.sens + paso))
+    elif campo == 'fov':
+        S.fov = max(70, min(110, S.fov + paso))
+        camera.fov = S.fov
+    else:
+        S.dif = max(0, min(2, S.dif + paso))
+    refrescar_config()
+    guardar()
+
+
+def borrar_record():
+    S.record_ola = S.record_bajas = 0
+    guardar()
+    poner(m_record, '')
+
+
+def refrescar_config():
+    poner(v_sens, str(S.sens))
+    poner(v_fov, str(S.fov))
+    poner(v_dif, DIFICULTADES[S.dif][0])
+
+
+v_sens = fila(.15, 'Sensibilidad del mouse', lambda: cambiar('sens', -5), lambda: cambiar('sens', 5))
+v_fov = fila(.03, 'Campo de visión', lambda: cambiar('fov', -5), lambda: cambiar('fov', 5))
+v_dif = fila(-.09, 'Dificultad', lambda: cambiar('dif', -1), lambda: cambiar('dif', 1))
+boton(p_config, 'BORRAR RÉCORD', (0, -.2), borrar_record, .42, .06)
+boton(p_config, 'VOLVER', (0, -.3), lambda: mostrar_panel('principal'))
+
+
+def abrir_menu(titulo, sub, jugar, salir):
     poner(m_titulo, titulo)
     poner(m_sub, sub)
-    poner(m_boton, boton)
+    b_jugar.text = jugar
+    b_salir.text = salir
+    poner(m_record, f'Récord: oleada {S.record_ola}  ·  {S.record_bajas} bajas' if S.record_ola else '')
+    refrescar_armas()
+    refrescar_config()
+    mostrar_panel('principal')
     menu.enabled = True
     hud.enabled = False
     mouse.locked = False
     jugador.enabled = False
+    camera.fov = S.fov
 
 
 def entrar_al_juego():
     S.modo = 'juego'
+    S.enfriamiento = .3
     menu.enabled = False
     hud.enabled = True
     mouse.locked = True
@@ -370,7 +539,7 @@ class Enemigo(Entity):
             blanco += Vec3(random.uniform(-2, 2), random.uniform(-1, 1), random.uniform(-2, 2))
         trazador(origen, blanco, '#ff6a3a')
         if acierta:
-            dano_jugador(random.uniform(5, 9) * (1 + S.ola * .03))
+            dano_jugador(random.uniform(5, 9) * (1 + S.ola * .03) * DIFICULTADES[S.dif][1])
 
     def golpe(self, dano, cabeza, punto):
         if not self.vivo:
@@ -459,8 +628,12 @@ def dano_jugador(n):
     S.sangre = 1.0
     if S.hp <= 0 and S.modo == 'juego':
         S.modo = 'fin'
-        abrir_menu('Caíste en combate', f'Llegaste a la oleada {S.ola} con {S.bajas} bajas.',
-                   'Clic o ENTER para volver a la línea')
+        sub = f'Llegaste a la oleada {S.ola} con {S.bajas} bajas.'
+        if (S.ola, S.bajas) > (S.record_ola, S.record_bajas):
+            S.record_ola, S.record_bajas = S.ola, S.bajas
+            guardar()
+            sub += '\n¡Nuevo récord!'
+        abrir_menu('Caíste en combate', sub, 'JUGAR DE NUEVO', 'SALIR AL MENÚ')
 
 
 def siguiente_ola():
@@ -480,10 +653,7 @@ def aparecer():
 
 
 def nueva_partida():
-    for e in S.enemigos + S.recogibles:
-        destroy(e)
-    S.enemigos.clear()
-    S.recogibles.clear()
+    limpiar()
     S.ola, S.bajas, S.hp, S.granadas = 0, 0, 100.0, 3
     S.t_aparicion = S.t_ola = 0.0
     S.municion = [a['cargador'] for a in ARMAS]
@@ -491,7 +661,7 @@ def nueva_partida():
     jugador.position = (0, .1, 0)
     jugador.rotation_y = 0
     jugador.camera_pivot.rotation_x = 0
-    cambiar_arma(0)
+    cambiar_arma(S.arma_inicial)
     siguiente_ola()
     entrar_al_juego()
 
@@ -551,7 +721,7 @@ def lanzar_granada():
 
 def pausar():
     S.modo = 'pausa'
-    abrir_menu('Pausa', 'Hacé clic para volver al combate.', 'Clic o ENTER: continuar   |   Q: salir')
+    abrir_menu('Pausa', 'Tu partida te espera.', 'CONTINUAR', 'SALIR AL MENÚ')
 
 
 # ------------------------------------------------------------------ bucle principal
@@ -571,13 +741,13 @@ def input(key):
             cambiar_arma((S.arma + 1) % len(ARMAS))
         elif key in ('escape', 'p'):
             pausar()
-    elif key in ('left mouse down', 'enter'):
-        if S.modo == 'pausa':
+    elif key == 'enter':
+        accion_jugar()
+    elif key in ('escape', 'p'):
+        if S.panel != 'principal':
+            mostrar_panel('principal')
+        elif S.modo == 'pausa':
             entrar_al_juego()
-        else:
-            nueva_partida()
-    elif key == 'q' and S.modo == 'pausa':
-        application.quit()
 
 
 def update():
@@ -601,8 +771,8 @@ def update():
             S.municion[S.arma] += n
             S.reserva[S.arma] -= n
     zoom = held_keys['right mouse']
-    camera.fov = lerp(camera.fov, a['zoom'] if zoom else FOV, min(1, dt * 12))
-    jugador.mouse_sensitivity = Vec2(40, 40) * (camera.fov / FOV)
+    camera.fov = lerp(camera.fov, a['zoom'] if zoom else S.fov, min(1, dt * 12))
+    jugador.mouse_sensitivity = Vec2(S.sens, S.sens) * (camera.fov / S.fov)
     arma.visible = not (S.arma == 3 and zoom and camera.fov < 45)
 
     # oleadas
@@ -640,7 +810,6 @@ def update():
 construir_mundo()
 S.municion = [a['cargador'] for a in ARMAS]
 S.reserva = [a['reserva'] for a in ARMAS]
-cambiar_arma(0)
-abrir_menu('Frente de Batalla', 'Un soldado, una línea, sin refuerzos.\nResistí las oleadas.',
-           'Clic o ENTER para entrar al combate')
+cambiar_arma(S.arma_inicial)
+abrir_menu(*TEXTOS_INICIO)
 app.run()
