@@ -572,7 +572,7 @@ def construir_mundo():
 # ------------------------------------------------------------------ jugador y arma en primera persona
 jugador = FirstPersonController(position=(0, .1, 0))
 jugador.jump_height = 1.2
-if hasattr(jugador, 'cursor'):
+if hasattr(jugador, 'cursor') and jugador.cursor is not None:
     jugador.cursor.alpha = 0      # la mira propia es la de la interfaz; el controlador necesita que este objeto exista
 camera.clip_plane_near = .05
 camera.fov = S.fov
@@ -689,9 +689,28 @@ def mensaje(txt):
 
 # --- menú: pestañas arriba (JUGAR / ARMERÍA / AJUSTES); el soldado queda en el centro
 def boton(padre, txt, pos, accion, ancho=.5, alto=.08, col='#1d1813', hl='#6a4f2a', txt_col=None):
-    extra = dict(text_color=C(txt_col)) if txt_col else {}
-    return Button(parent=padre, text=txt, position=pos, scale=(ancho, alto), color=C(col),
-                  highlight_color=C(hl), pressed_color=C('#8a6a30'), on_click=accion, **extra, **UI)
+    # El texto nunca arranca vacío (si no, Ursina no crea el objeto de texto interno y
+    # falla al asignar text_color). El color del texto se aplica después de crear el botón.
+    b = Button(parent=padre, text=txt or ' ', position=pos, scale=(ancho, alto), color=C(col),
+               highlight_color=C(hl), pressed_color=C('#8a6a30'), on_click=accion, **UI)
+    b._txt_col = None
+    if txt_col:
+        b._txt_col = C(txt_col)
+        try:
+            b.text_color = b._txt_col
+        except Exception:
+            pass
+    return b
+
+
+def poner_boton(b, txt):
+    """Cambia el texto de un botón y mantiene el color del texto que tenía."""
+    b.text = txt or ' '
+    if getattr(b, '_txt_col', None) is not None:
+        try:
+            b.text_color = b._txt_col
+        except Exception:
+            pass
 
 
 def icono_arma(padre, i, pos, ancho_max=.42, alto_max=.1):
@@ -797,7 +816,7 @@ def borrar_record():
 def refrescar_menu():
     i = S.arma_inicial
     # JUGAR
-    b_modo.text = 'MODO: BATTLE ROYALE' if S.br else 'MODO: OLEADAS'
+    poner_boton(b_modo, 'MODO: BATTLE ROYALE' if S.br else 'MODO: OLEADAS')
     poner(m_info, 'RÉCORD OLEADAS\n' + (f'Oleada {S.record_ola}  ·  {S.record_bajas} bajas' if S.record_ola else 'Todavía sin récord')
           + '\n\nMEJOR PUESTO BR\n' + (f'#{S.mejor_puesto}' if S.mejor_puesto else 'Todavía sin puesto')
           + f'\n\nPUNTOS\n{S.puntos}\n\nDIFICULTAD\n{DIFICULTADES[S.dif][0]}')
@@ -814,10 +833,10 @@ def refrescar_menu():
             sig_n = list(S.mejoras[i])
             sig_n[k] += 1
             poner(t, f'{nombre}: {fmt(clave, actual)}  ->  {fmt(clave, ef(i, sig_n)[clave])}')
-            b.text = f'Nv {n}/{NIVEL_MAX} · {costo(n)} pts'
+            poner_boton(b, f'Nv {n}/{NIVEL_MAX} · {costo(n)} pts')
         else:
             poner(t, f'{nombre}: {fmt(clave, actual)}  (máximo)')
-            b.text = 'MÁXIMO'
+            poner_boton(b, 'MÁXIMO')
     poner(m_puntos, f'Puntos: {S.puntos}')
     # AJUSTES
     poner(v_sens, str(S.sens))
@@ -846,9 +865,9 @@ subray = panel(menu, (-.3, .425), (.26, .006), ORO, 1, .1)
 # pestaña JUGAR
 m_titulo = texto(p_principal, '', (-.86, .39), 3, ORO, (-.5, .5))
 m_sub = texto(p_principal, '', (-.86, .19), 1.1, CREMA, (-.5, .5))
-b_modo = boton(p_principal, '', (-.58, .01), lambda: cambiar_modo(), .5, .07, '#2a2036', '#4a3a66')
-b_jugar = boton(p_principal, '', (-.58, -.1), accion_jugar, .5, .1, '#e8d82a', '#fff25a', '#14110d')
-b_salir = boton(p_principal, '', (-.58, -.22), accion_salir, .5, .07)
+b_modo = boton(p_principal, 'MODO', (-.58, .01), lambda: cambiar_modo(), .5, .07, '#2a2036', '#4a3a66')
+b_jugar = boton(p_principal, 'JUGAR', (-.58, -.1), accion_jugar, .5, .1, '#e8d82a', '#fff25a', '#14110d')
+b_salir = boton(p_principal, 'SALIR', (-.58, -.22), accion_salir, .5, .07)
 m_info = texto(p_principal, '', (.3, .39), 1.25, CREMA, (-.5, .5))
 texto(p_principal, CONTROLES, (.3, -.2), .85, GRIS, (-.5, .5))
 
@@ -857,7 +876,7 @@ marcos, b_armas = [], []
 for _k, _w in enumerate(ARMAS):
     _yc = .3 - _k * .2
     marcos.append(panel(p_armas, (-.58, _yc), (.6, .2), ORO, 1, .3))
-    b_armas.append(boton(p_armas, '', (-.58, _yc), lambda k=_k: elegir_arma(k), .56, .18, '#4a3f33', '#6b5840'))
+    b_armas.append(boton(p_armas, ' ', (-.58, _yc), lambda k=_k: elegir_arma(k), .56, .18, '#4a3f33', '#6b5840'))
     _nombre = texto(p_armas, _w['n'].upper(), (-.58, _yc + .065), 1.1, CREMA)
     _nombre.z = -.05
     icono_arma(p_armas, _k, (-.58, _yc - .025))
@@ -867,7 +886,7 @@ filas_mej = []
 for _k in range(len(MEJORAS)):
     _y = .2 - _k * .1
     filas_mej.append((texto(p_armas, '', (.3, _y), 1.05, CREMA, (-.5, 0)),
-                      boton(p_armas, '', (.76, _y), lambda k=_k: comprar(k), .26, .065)))
+                      boton(p_armas, ' ', (.76, _y), lambda k=_k: comprar(k), .26, .065)))
 m_puntos = texto(p_armas, '', (.3, -.2), 1.4, ORO, (-.5, 0))
 m_aviso = texto(p_armas, '', (.3, -.27), 1.0, '#e8472d', (-.5, 0))
 texto(p_armas, 'Ganás puntos eliminando enemigos\ny superando oleadas. Las mejoras\nse guardan para la próxima vez.',
@@ -936,8 +955,8 @@ def abrir_menu(titulo, sub, jugar, salir):
     guardar()
     poner(m_titulo, titulo)
     poner(m_sub, sub)
-    b_jugar.text = jugar
-    b_salir.text = salir
+    poner_boton(b_jugar, jugar)
+    poner_boton(b_salir, salir)
     poner(m_aviso, '')
     b_modo.enabled = (S.modo != 'pausa')      # el modo no se cambia en plena partida
     vitrina_arma(S.arma_inicial)
