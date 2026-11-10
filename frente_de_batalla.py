@@ -16,6 +16,8 @@ import random
 
 from ursina import *
 from ursina.prefabs.first_person_controller import FirstPersonController
+from ursina.collider import Collider
+from panda3d.core import CollisionBox, Point3
 
 C = color.hex
 
@@ -121,7 +123,9 @@ except Exception:
     pass
 
 # ------------------------------------------------------------------ mundo de combate
-mundo = Entity()
+mundo = Entity()      # todo lo que bloquea balas y enemigos cuelga de acá
+estatico = Entity()   # parte visual del escenario; al terminar se fusiona en una sola malla
+CAJAS = []            # colisiones del escenario; se juntan en un solo collider
 ruinas = []
 PUNTOS = []
 LADRILLO = ['#6e4a3c', '#7a5442', '#5d3f33', '#8a6249']
@@ -129,9 +133,25 @@ CONCRETO = ['#475569', '#334155', '#1e293b']
 
 
 def bloque(x, z, ancho, alto, largo, col, y=0.0, solido=True):
-    return Entity(parent=mundo if solido else None, model='cube',
-                  position=(x, y + alto / 2, z), scale=(ancho, alto, largo),
-                  color=C(col), collider='box' if solido else None)
+    if solido:
+        caja(x, y + alto / 2, z, ancho, alto, largo)
+    return Entity(parent=estatico, model='cube',
+                  position=(x, y + alto / 2, z), scale=(ancho, alto, largo), color=C(col))
+
+
+def caja(x, y, z, ancho, alto, largo):
+    CAJAS.append(CollisionBox(Point3(x, y, z), ancho / 2, alto / 2, largo / 2))
+
+
+def fusionar_escenario():
+    """Cientos de cubos quietos -> 1 malla y 1 collider: mismo aspecto, muchas menos llamadas de dibujo."""
+    malla = estatico.attachNewNode('malla')
+    for e in list(estatico.children):
+        e.model.copyTo(malla).setMat(e.model.getMat(malla))
+        destroy(e)
+    malla.flattenStrong()
+    colision = Entity(parent=mundo)
+    colision.collider = Collider(colision, CAJAS)
 
 
 def cerca_de_ruina(p, radio):
@@ -169,8 +189,8 @@ def ruina(cx, cz, w, d):
 def construir_mundo():
     Entity(model='cube', scale=(130, 1, 130), y=-.5, color=C('#242b26'), collider='box')
     for lado in (-1, 1):
-        Entity(parent=mundo, model='cube', position=(60 * lado, 5, 0), scale=(1, 10, 124), collider='box', visible=False)
-        Entity(parent=mundo, model='cube', position=(0, 5, 60 * lado), scale=(124, 10, 1), collider='box', visible=False)
+        caja(60 * lado, 5, 0, 1, 10, 124)
+        caja(0, 5, 60 * lado, 124, 10, 1)
 
     intentos = 0
     while len(ruinas) < 11 and intentos < 300:
@@ -207,6 +227,8 @@ def construir_mundo():
         p = Vec3(max(-56, min(56, math.sin(ang) * rad)), 0, max(-56, min(56, math.cos(ang) * rad)))
         if not cerca_de_ruina(p, 9):
             PUNTOS.append(p)
+
+    fusionar_escenario()
 
 
 # ------------------------------------------------------------------ jugador en combate
@@ -278,7 +300,7 @@ class ManiquiLobby(Entity):
         # Arma en mano
         self.holder_arma = Entity(parent=self, position=(.2, 1.35, .4), rotation=(15, -15, 5))
         self.modelo_arma = Entity(parent=self.holder_arma, model='cube', scale=(.08, .12, .65), color=C('#22252a'))
-        self.canon_arma = Entity(parent=self.holder_arma, model='cube', scale=(.04, .04, .3), position=(0, .02, .4), color=C('#111'))
+        self.canon_arma = Entity(parent=self.holder_arma, model='cube', scale=(.04, .04, .3), position=(0, .02, .4), color=C('#111111'))
 
         # Placa de nombre flotante arriba del jugador
         self.placa = Entity(parent=self, position=(0, 2.65, 0), billboard=True)
@@ -447,7 +469,7 @@ for i, w in enumerate(ARMAS):
     # Foto / Miniatura 3D del arma dentro de la tarjeta
     visor_3d = Entity(parent=card, position=(0, .01, -.2), rotation=(15, -35, 10))
     cuerpo_mini = Entity(parent=visor_3d, model='cube', scale=(.08, .12, w['largo']), color=C(w['col']))
-    Entity(parent=visor_3d, model='cube', scale=(.04, .04, .25), position=(0, .02, w['largo'] / 2 + .1), color=C('#111'))
+    Entity(parent=visor_3d, model='cube', scale=(.04, .04, .25), position=(0, .02, w['largo'] / 2 + .1), color=C('#111111'))
     mini_armas_3d.append(visor_3d)
 
     # Estadísticas
@@ -518,9 +540,9 @@ DIFICULTADES = [('Fácil', .6), ('Normal', 1.0), ('Difícil', 1.5)]
 
 def fila_config(y, nombre, menos, mas):
     texto(p_config, nombre, (-.5, y), 1.4, origen=(-.5, 0))
-    Button(p_config, text='-', position=(.15, y), scale=(.06, .06), color=C('#1e293b'), on_click=menos, **UI)
+    Button(parent=p_config, text='-', position=(.15, y), scale=(.06, .06), color=C('#1e293b'), on_click=menos, **UI)
     val = texto(p_config, '', (.35, y), 1.4)
-    Button(p_config, text='+', position=(.55, y), scale=(.06, .06), color=C('#1e293b'), on_click=mas, **UI)
+    Button(parent=p_config, text='+', position=(.55, y), scale=(.06, .06), color=C('#1e293b'), on_click=mas, **UI)
     return val
 
 
@@ -555,15 +577,15 @@ def refrescar_cfg_txt():
     perfil_record.text = f'Récord: Ola {S.record_ola}'
 
 
-Button(p_config, text='RESTABLECER RÉCORD', position=(0, -.2), scale=(.38, .06), color=C('#991b1b'), on_click=borrar_record, **UI)
-Button(p_config, text='VOLVER', position=(0, -.3), scale=(.3, .07), color=C('#1e293b'), on_click=lambda: mostrar_panel('lobby'), **UI)
+Button(parent=p_config, text='RESTABLECER RÉCORD', position=(0, -.2), scale=(.38, .06), color=C('#991b1b'), on_click=borrar_record, **UI)
+Button(parent=p_config, text='VOLVER', position=(0, -.3), scale=(.3, .07), color=C('#1e293b'), on_click=lambda: mostrar_panel('lobby'), **UI)
 
 # --- PANEL PAUSA Y GAME OVER
 Entity(parent=p_pausa, model='quad', scale=(2, 1.2), color=C('#050811e5'), z=1, **UI)
 pausa_titulo = texto(p_pausa, 'PAUSA', (0, .28), 3.5, ORO)
 pausa_sub = texto(p_pausa, 'Combate suspendido temporalmente', (0, .18), 1.2, '#94a3b8')
-b_pausa_reanudar = Button(p_pausa, text='CONTINUAR', position=(0, .02), scale=(.4, .08), color=C('#22c55e'), on_click=lambda: entrar_al_juego(), **UI)
-Button(p_pausa, text='SALIR AL MENÚ PRINCIPAL', position=(0, -.12), scale=(.4, .08), color=C('#1e293b'), on_click=lambda: volver_al_menu(), **UI)
+b_pausa_reanudar = Button(parent=p_pausa, text='CONTINUAR', position=(0, .02), scale=(.4, .08), color=C('#22c55e'), on_click=lambda: entrar_al_juego(), **UI)
+Button(parent=p_pausa, text='SALIR AL MENÚ PRINCIPAL', position=(0, -.12), scale=(.4, .08), color=C('#1e293b'), on_click=lambda: volver_al_menu(), **UI)
 
 
 # ------------------------------------------------------------------ CONTROL DEL FLUJO
@@ -613,18 +635,61 @@ def limpiar():
 
 
 # ------------------------------------------------------------------ COMBATE Y EFECTOS
+class Efectos(Entity):
+    """Chispas y trazadores reciclados: en vez de crear y destruir entidades
+    (y animaciones) en cada disparo, se reusan y se mueven todas juntas acá."""
+    def __init__(self):
+        super().__init__()
+        self.libres = {'chispa': [], 'trazador': []}
+        self.activos = []      # [entidad, tipo, inicio, recorrido, vida, t]
+
+    def tomar(self, tipo, col):
+        libres = self.libres[tipo]
+        if libres:
+            e = libres.pop()
+            e.enabled = True
+        else:
+            e = Entity(model='cube', add_to_scene_entities=False, **UI)
+        e.color = col
+        return e
+
+    def update(self):
+        dt = time.dt
+        quedan = []
+        for q in self.activos:
+            e, tipo, inicio, recorrido, vida, t = q
+            t += dt
+            if t >= vida:
+                e.enabled = False
+                self.libres[tipo].append(e)
+                continue
+            q[5] = t
+            if recorrido is not None:
+                e.position = inicio + recorrido * curve.out_quad(t / vida)
+            quedan.append(q)
+        self.activos = quedan
+
+
+efectos = Efectos()
+
+
 def chispas(pos, col, n, vel, tam, vida=.5):
+    col = C(col)
+    pos = Vec3(*pos)
     for _ in range(n):
-        p = Entity(model='cube', position=pos, scale=tam, color=C(col), **UI)
+        p = efectos.tomar('chispa', col)
+        p.position = pos
+        p.scale = tam
         d = Vec3(random.uniform(-1, 1), random.uniform(0, 1.2), random.uniform(-1, 1)).normalized()
-        p.animate_position(pos + d * random.uniform(.4, 1) * vel * vida, duration=vida, curve=curve.out_quad)
-        destroy(p, delay=vida)
+        efectos.activos.append([p, 'chispa', pos, d * random.uniform(.4, 1) * vel * vida, vida, 0.0])
 
 
 def trazador(a, b, col):
-    t = Entity(model='cube', position=(a + b) / 2, scale=(.03, .03, (b - a).length()), color=C(col), **UI)
+    t = efectos.tomar('trazador', C(col))
+    t.position = (a + b) / 2
+    t.scale = (.03, .03, (b - a).length())
     t.look_at(b)
-    destroy(t, delay=.06)
+    efectos.activos.append([t, 'trazador', None, None, .06, 0.0])
 
 
 def explosion(p):
@@ -653,6 +718,8 @@ class Enemigo(Entity):
         self.t_lado = 2.0
         self.t_vista = 0.0
         self.ve = False
+        self.t_obstaculo = 0.0
+        self.obstaculo = False
         uniforme = random.choice(('#334155', '#1e293b', '#0f172a'))
         self.cuerpo = Entity(parent=self, model='cube', color=C(uniforme), position=(0, 1.1, 0), scale=(.55, .9, .35), collider='box')
         self.cabeza = Entity(parent=self, model='cube', color=C('#e2e8f0'), position=(0, 1.75, 0), scale=(.32, .32, .32), collider='box')
@@ -670,6 +737,7 @@ class Enemigo(Entity):
         self.cool -= dt
         self.t_lado -= dt
         self.t_vista -= dt
+        self.t_obstaculo -= dt
         dx, dz = jugador.x - self.x, jugador.z - self.z
         d = math.hypot(dx, dz) or .001
         dir = Vec3(dx / d, 0, dz / d)
@@ -685,7 +753,10 @@ class Enemigo(Entity):
             self.ve = not raycast(ojos, hacia.normalized(), distance=hacia.length(), traverse_target=mundo).hit
 
         mv = lateral * .6 if (d < self.pref and self.ve) else dir
-        if raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit:
+        if self.t_obstaculo <= 0:      # no hace falta mirar cada frame si hay una pared adelante
+            self.t_obstaculo = .1
+            self.obstaculo = raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit
+        if self.obstaculo:
             mv = lateral
         if d > 1.5:
             self.position += mv * self.vel * dt
