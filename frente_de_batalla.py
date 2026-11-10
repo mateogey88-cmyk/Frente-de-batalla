@@ -9,16 +9,20 @@ Clic disparar | Clic derecho zoom | 1-4 o rueda: cambiar arma
 R recargar | G granada | Esc o P pausa
 Battle Royale: Z pared | X piso | C rampa | Q salir de construcción
 
-Las opciones, los puntos, las mejoras de armas y el récord se guardan en
+Menú: JUGAR | ARMERÍA (mejoras) | CASILLERO (tus skins) | TIENDA (skins del día) | AJUSTES
+
+Las opciones, tus chapas (la moneda del juego), las mejoras de armas, las skins y el récord se guardan en
 frente_de_batalla.json (en tu carpeta de usuario).
 """
 import json
 import math
 import os
 import random
+from time import time as ahora      # reloj real (la tienda cambia todos los días)
 
 from ursina import *
 from ursina.prefabs.first_person_controller import FirstPersonController
+from panda3d.core import ClockObject, AntialiasAttrib, loadPrcFileData
 
 C = color.hex          # C('#ff9a30') -> color
 ORO, CREMA, GRIS = '#d9a441', '#f1e7d0', '#b9ab8c'
@@ -38,6 +42,71 @@ ARMA_FP = [(.22, -.2, .45, .9), (.17, -.16, .35, 1.1), (.22, -.2, .4, .85), (.2,
 NIVEL_MAX = 5
 MEJORAS = [('Daño', 'dano'), ('Cargador', 'cargador'), ('Cadencia', 'ritmo'), ('Recarga', 'recarga')]
 DIFICULTADES = [('Fácil', .6), ('Normal', 1.0), ('Difícil', 1.5)]   # (nombre, daño que te hacen)
+
+# --- Skins (trajes del soldado). Para agregar una: sumá un dict a SKINS (se ve sola en casillero y tienda).
+# r = rareza (0 común, 1 rara, 2 épica, 3 legendaria). Opcionales: lentes, cresta, hombreras, neon, guante.
+# 'neon' además pinta el color de tus balas. La skin 0 es gratis y siempre la tenés.
+RAREZA = [('COMÚN', '#9aa3a8'), ('RARA', '#4aa3ff'), ('ÉPICA', '#b25cff'), ('LEGENDARIA', '#ffae2a')]
+SKINS = [
+    dict(n='Soldado', r=0, precio=0, d='El uniforme de siempre.\nViene con el juego.',
+         ropa='#3a4044', chaleco='#24282b', casco='#2c3033', pantalon='#30363a'),
+    dict(n='Bosque', r=0, precio=300, d='Camuflaje verde para\nmoverte entre los árboles.',
+         ropa='#4a5339', chaleco='#2f3826', casco='#3e4632', pantalon='#3f4733'),
+    dict(n='Desierto', r=0, precio=300, d='Tonos arena para\npatrullar terreno seco.',
+         ropa='#74694b', chaleco='#524a36', casco='#5e5640', pantalon='#6b6147'),
+    dict(n='Nieve', r=0, precio=350, d='Blanco invernal.\nPasás desapercibido.',
+         ropa='#d9dee2', chaleco='#aab4bc', casco='#c7ced4', pantalon='#b8c0c6', lentes='#2a3b4a'),
+    dict(n='Comando Rojo', r=1, precio=600, d='Fuerzas especiales.\nVisor rojo y hombreras.',
+         ropa='#6b1f1f', chaleco='#3a1010', casco='#4a1414', pantalon='#2f2f33', lentes='#ff5a4a', hombreras='#3a1010'),
+    dict(n='Cazador Azul', r=1, precio=650, d='Operador nocturno.\nVisor celeste y hombreras.',
+         ropa='#1f3f6b', chaleco='#10243a', casco='#14304a', pantalon='#2a2f38', lentes='#6ad0ff', hombreras='#10243a'),
+    dict(n='Sombra Neón', r=2, precio=1000, d='Sigilo urbano.\nTus balas brillan en cian.',
+         ropa='#15151c', chaleco='#0d0d12', casco='#0d0d12', pantalon='#15151c', lentes='#4fe3ff', neon='#4fe3ff', guante='#0d0d12'),
+    dict(n='Samurái', r=2, precio=1100, d='Armadura de guerrero.\nCasco dorado con cresta.',
+         ropa='#7a1d1d', chaleco='#2a2a2a', casco='#b8862a', pantalon='#2a1a1a', lentes='#ffd070', cresta='#a01818', hombreras='#b8862a'),
+    dict(n='Punk', r=2, precio=1000, d='Cresta rosa y mucha actitud.\nTus balas son rosas.',
+         ropa='#2a1a3a', chaleco='#3a1a4a', casco='#1c1224', pantalon='#1c1c26', lentes='#ffe14a', cresta='#ff4fd8', neon='#ff4fd8'),
+    dict(n='Robot', r=3, precio=1500, d='Máquina de guerra.\nTus balas son rojas.',
+         ropa='#8a9099', chaleco='#5a6068', casco='#a0a8b0', pantalon='#6a7078', lentes='#ff3030', neon='#ff3030', guante='#3a3f45', hombreras='#5a6068'),
+    dict(n='Rey Dorado', r=3, precio=1800, d='Oro macizo de pies a cabeza.\nTus balas son doradas.',
+         ropa='#c9a030', chaleco='#8a6a18', casco='#e8c040', pantalon='#7a5a14', lentes='#ffffff', neon='#ffe070', cresta='#e8c040', hombreras='#e8c040', guante='#7a5a14'),
+    dict(n='Fantasma', r=3, precio=1700, d='Etéreo y silencioso.\nTus balas son violetas.',
+         ropa='#e8e8f0', chaleco='#b8b8c8', casco='#f0f0f8', pantalon='#c8c8d8', lentes='#a56bff', neon='#a56bff', guante='#b8b8c8'),
+    dict(n='Urbano', r=0, precio=350, d='Gris ciudad.\nSe pierde entre los escombros.',
+         ropa='#4a4f58', chaleco='#2c3038', casco='#3a3f48', pantalon='#3a3d44'),
+    dict(n='Pirata', r=1, precio=700, d='Capitán de los mares.\nHombreras de cuero.',
+         ropa='#5a2a1a', chaleco='#2a1a10', casco='#101010', pantalon='#2a2018', lentes='#ffd070', hombreras='#7a4a22'),
+    dict(n='Astronauta', r=1, precio=750, d='Directo desde la órbita.\nVisor ámbar.',
+         ropa='#e8eaee', chaleco='#c8ccd2', casco='#f2f4f8', pantalon='#d8dce2', lentes='#ffb030', hombreras='#9aa0aa', guante='#6a7078'),
+    dict(n='Ninja', r=1, precio=700, d='Silencioso y letal.\nOjos rojos en la noche.',
+         ropa='#1a1a1e', chaleco='#101014', casco='#101014', pantalon='#1a1a1e', lentes='#ff3030'),
+    dict(n='Magma', r=2, precio=1200, d='Forjado en lava.\nTus balas son naranjas.',
+         ropa='#2a1410', chaleco='#4a1a10', casco='#1a0c0a', pantalon='#2a1410', lentes='#ff9a30', neon='#ff7a1c', cresta='#ff5a10'),
+    dict(n='Hielo', r=2, precio=1150, d='Frío como el invierno.\nTus balas son celestes.',
+         ropa='#4a7fa8', chaleco='#2a5278', casco='#8ad0f0', pantalon='#3a6a90', lentes='#ffffff', neon='#a8ecff', cresta='#b8f0ff'),
+    dict(n='Tóxico', r=2, precio=1100, d='Radiactivo.\nTus balas son verde ácido.',
+         ropa='#2a3a1a', chaleco='#1a2410', casco='#1e2a12', pantalon='#2a3318', lentes='#9aff3a', neon='#8aff2a', hombreras='#1a2410'),
+    dict(n='Dragón', r=3, precio=2000, d='Escamas de jade y oro.\nTus balas son doradas.',
+         ropa='#1a5a3a', chaleco='#0e3a24', casco='#c9a030', pantalon='#12402a', lentes='#ffd34a', neon='#ffd34a', cresta='#c9a030', hombreras='#c9a030', guante='#0e3a24'),
+    dict(n='Galaxia', r=3, precio=1900, d='Polvo de estrellas.\nTus balas son violetas.',
+         ropa='#241a4a', chaleco='#150e30', casco='#1a1238', pantalon='#1c1440', lentes='#ff4fd8', neon='#b06bff', cresta='#ff4fd8', hombreras='#3a2a7a', guante='#150e30'),
+]
+PAG = 12                          # skins por página en el casillero
+
+# --- Gráficos: cada opción es un número que indexa su lista de valores
+OPC_G = {
+    'pant': ['No', 'Sí'],
+    'fps_lim': ['30', '60', '120', 'Ilimitado'],
+    'sombras': ['Baja', 'Media', 'Alta'],
+    'dist': ['Corta', 'Media', 'Larga'],
+    'efectos': ['Bajos', 'Normales', 'Altos'],
+    'aa': ['No', 'Sí'],
+    'ver_fps': ['No', 'Sí'],
+}
+FPS_LIM = [30, 60, 120, 0]                         # 0 = sin límite
+SOMBRAS = [512, 1024, 2048]                        # resolución de las sombras
+DIST = [(25, 80), (45, 150), (80, 260)]            # (dónde empieza la niebla, dónde tapa todo)
+EFECTOS = [.4, 1.0, 1.6]                           # cuántas chispas y partículas salen
 
 # --- Battle Royale
 N_BOTS = 15                       # soldados rivales (vos sos el 16.º)
@@ -63,6 +132,20 @@ class S:
     br = 0                        # 0 = oleadas, 1 = battle royale
     mejor_puesto = 0
     mejoras = [[0, 0, 0, 0] for _ in ARMAS]
+    skin = 0                      # skin equipada (se guarda)
+    skins = [0]                   # skins que tenés (se guarda)
+    sel_skin = 0                  # skin que estás mirando en casillero / tienda
+    pag_loc = 0                   # página del casillero
+    # gráficos (se guardan)
+    pant = 0
+    fps_lim = 3
+    sombras = 1
+    dist = 1
+    efectos = 1
+    aa = 0
+    ver_fps = 0
+    skin_vista = -1               # skin que muestra ahora el soldado del menú
+    t_reloj = 0.0
     # partida
     hp = 100.0
     ola = 0
@@ -128,13 +211,14 @@ def fmt(clave, v):
 
 # ------------------------------------------------------------------ opciones guardadas
 RUTA = os.path.join(os.path.expanduser('~'), 'frente_de_batalla.json')
-INTS = ('fov', 'sens', 'dif', 'arma_inicial', 'record_ola', 'record_bajas', 'puntos', 'br', 'mejor_puesto')
+INTS = ('fov', 'sens', 'dif', 'arma_inicial', 'record_ola', 'record_bajas', 'puntos', 'br', 'mejor_puesto', 'skin', 'pant', 'fps_lim', 'sombras', 'dist', 'efectos', 'aa', 'ver_fps')
 
 
 def guardar():
     try:
         datos = {k: getattr(S, k) for k in INTS}
         datos['mejoras'] = S.mejoras
+        datos['skins'] = list(S.skins)
         with open(RUTA, 'w') as f:
             json.dump(datos, f)
     except Exception:
@@ -151,6 +235,9 @@ def cargar():
         m = datos.get('mejoras')
         if isinstance(m, list) and len(m) == len(ARMAS) and all(isinstance(f, list) and len(f) == 4 for f in m):
             S.mejoras = [[max(0, min(NIVEL_MAX, int(v))) for v in f] for f in m]
+        sk = datos.get('skins')
+        if isinstance(sk, list):
+            S.skins = sorted({int(v) for v in sk if 0 <= int(v) < len(SKINS)} | {0})
     except Exception:
         pass
     S.fov = max(70, min(110, S.fov))
@@ -159,18 +246,30 @@ def cargar():
     S.arma_inicial = max(0, min(len(ARMAS) - 1, S.arma_inicial))
     S.puntos = max(0, S.puntos)
     S.br = 1 if S.br else 0
+    for campo, op in OPC_G.items():
+        setattr(S, campo, max(0, min(len(op) - 1, getattr(S, campo))))
+    if S.skin not in S.skins:
+        S.skin = 0
+    S.sel_skin = S.skin
 
 
 cargar()
 
 
 # ------------------------------------------------------------------ ventana, cielo y luces
+if S.aa:
+    loadPrcFileData('', 'framebuffer-multisample 1\nmultisamples 4')      # suavizado de bordes (MSAA)
 app = Ursina(title='Frente de Batalla', borderless=False)
 for nombre in ('fps_counter', 'exit_button', 'entity_counter', 'collider_counter'):
     obj = getattr(window, nombre, None)
     if obj is not None:
         obj.enabled = False
 window.color = C('#8a5a40')
+if S.aa:
+    try:
+        scene.setAntialias(AntialiasAttrib.MAuto)
+    except Exception:
+        pass
 
 
 def tex(nombre):
@@ -188,6 +287,7 @@ def tex(nombre):
 T_LADRILLO, T_SUELO, T_RUIDO, T_VINETA = tex('brick'), tex('grass'), tex('noise'), tex('vignette')
 
 UI = {}   # opciones extra para lo que debe verse siempre claro (interfaz, luces)
+sol = None
 try:
     from ursina.shaders import lit_with_shadows_shader, unlit_shader
     Entity.default_shader = lit_with_shadows_shader
@@ -261,14 +361,14 @@ GUANTES = [[(0, -.115, -.07), (0, -.03, .3)], [(0, -.1, -.02), (0, -.05, .06)],
            [(0, -.14, -.1), (0, -.04, .34)], [(0, -.115, -.12), (0, -.04, .2)]]
 
 
-def armar_arma(padre, i, manos=False):
+def armar_arma(padre, i, manos=False, guante='#101112'):
     """Modelo 3D de cada arma, armado con las cajas de PARTES."""
     g = Entity(parent=padre)
     for parte in PARTES[i]:
         pieza(g, parte[0], parte[1], parte[2], **(parte[3] if len(parte) > 3 else {}))
     if manos:      # guantes (solo en primera persona)
-        pieza(g, GUANTES[i][0], (.065, .07, .09), '#101112')
-        pieza(g, GUANTES[i][1], (.075, .06, .11), '#101112')
+        pieza(g, GUANTES[i][0], (.065, .07, .09), guante)
+        pieza(g, GUANTES[i][1], (.075, .06, .11), guante)
     return g
 
 
@@ -282,8 +382,8 @@ PALETAS = {
 def construir_soldado(padre, paleta='negro', arma_i=0):
     """Soldado táctico: casco, máscara de gas, chaleco, radio y botas. Sirve para enemigos y para el menú."""
     r = Entity(parent=padre)
-    P = PALETAS[paleta]
-    NEG, GUANTE = '#17191b', '#101112'
+    P = PALETAS[paleta] if isinstance(paleta, str) else paleta     # nombre de paleta o un dict de skin
+    NEG, GUANTE = '#17191b', P.get('guante', '#101112')
     piernas = []
     for lado in (-1, 1):
         piv = Entity(parent=r, position=(lado * .12, .92, 0))   # la cadera: de acá se mueve la pierna
@@ -299,7 +399,15 @@ def construir_soldado(padre, paleta='negro', arma_i=0):
     pieza(r, (0, 1.86, 0), (.33, .15, .35), P['casco'])          # casco
     pieza(r, (0, 1.66, .14), (.19, .15, .1), '#0e0f10')          # máscara
     pieza(r, (0, 1.59, .2), (.08, .08, .09), '#2c2e30')          # filtro
-    pieza(r, (0, 1.71, .195), (.17, .05, .02), '#5d8794', **UI)  # lentes
+    pieza(r, (0, 1.71, .195), (.17, .05, .02), P.get('lentes', '#5d8794'), **UI)  # lentes
+    if P.get('cresta'):                                          # cresta sobre el casco
+        pieza(r, (0, 2.0, -.02), (.07, .16, .3), P['cresta'])
+    if P.get('hombreras'):
+        for lado in (-1, 1):
+            pieza(r, (lado * .36, 1.5, .06), (.2, .1, .2), P['hombreras'])
+    if P.get('neon'):                                            # líneas luminosas
+        pieza(r, (0, .95, .165), (.52, .04, .02), P['neon'], **UI)
+        pieza(r, (0, 1.4, .215), (.4, .03, .02), P['neon'], **UI)
     pieza(r, (.2, 1.42, -.12), (.08, .13, .06), NEG)             # radio
     pieza(r, (.2, 1.7, -.12), (.014, .5, .014), NEG)             # antena
     for lado in (-1, 1):
@@ -578,8 +686,61 @@ camera.clip_plane_near = .05
 camera.fov = S.fov
 
 arma = Entity(parent=camera)
-modelos_fp = [armar_arma(arma, i, manos=True) for i in range(len(ARMAS))]
+def guante_skin():
+    return SKINS[S.skin].get('guante', '#101112')
+
+
+def color_traza():
+    return SKINS[S.skin].get('neon', '#ffd28a')
+
+
+modelos_fp = [armar_arma(arma, i, manos=True, guante=guante_skin()) for i in range(len(ARMAS))]
 fogonazo = Entity(parent=arma, model='cube', color=C('#ffd070'), scale=(.12, .12, .1), enabled=False, **UI)
+
+
+def aplicar_graficos(inicial=False):
+    """Aplica las opciones gráficas. Cada una va en su try: si tu versión de Ursina no la soporta, se ignora."""
+    try:
+        if S.pant or not inicial:
+            window.fullscreen = bool(S.pant)
+    except Exception:
+        pass
+    try:
+        reloj = ClockObject.getGlobalClock()
+        lim = FPS_LIM[S.fps_lim]
+        if lim:
+            reloj.setMode(ClockObject.MLimited)
+            reloj.setFrameRate(lim)
+        elif not inicial:
+            reloj.setMode(ClockObject.MNormal)
+    except Exception:
+        pass
+    try:
+        if sol is not None and (S.sombras != 1 or not inicial):
+            r = SOMBRAS[S.sombras]
+            sol.shadow_map_resolution = Vec2(r, r)
+            sol._light.set_shadow_caster(True, r, r)
+    except Exception:
+        pass
+    try:
+        scene.fog_density = DIST[S.dist]
+    except Exception:
+        pass
+    try:
+        fc = getattr(window, 'fps_counter', None)
+        if fc is not None:
+            fc.enabled = bool(S.ver_fps)
+    except Exception:
+        pass
+
+
+def reconstruir_fp():
+    """Rearma las armas en primera persona (para que los guantes tomen el color de la skin)."""
+    for m in modelos_fp:
+        destroy(m)
+    modelos_fp[:] = [armar_arma(arma, i, manos=True, guante=guante_skin()) for i in range(len(ARMAS))]
+    for k, m in enumerate(modelos_fp):
+        m.enabled = (k == S.arma)
 
 
 def cambiar_arma(i):
@@ -738,7 +899,7 @@ def limpiar():
 
 
 TEXTOS_INICIO = ('FRENTE DE\nBATALLA', 'Un soldado, una línea,\nsin refuerzos.\nResistí las oleadas.', 'JUGAR', 'SALIR')
-TAB_X = {'principal': -.3, 'armas': 0, 'config': .3}
+TAB_X = {'principal': -.55, 'armas': -.33, 'casillero': -.11, 'tienda': .11, 'graficos': .33, 'config': .55}
 
 
 def accion_jugar():
@@ -762,6 +923,14 @@ def mostrar_panel(nombre):
     for n, pn in paneles.items():
         pn.enabled = (n == nombre)
     subray.x = TAB_X[nombre]
+    if nombre == 'casillero':
+        S.sel_skin = S.skin                    # el casillero arranca mirando tu skin equipada
+        S.pag_loc = S.skin // PAG
+    elif nombre == 'tienda':
+        S.sel_skin = tienda_ids()[0]           # la tienda arranca con la skin destacada del día
+    aviso_skin('')
+    vista_previa()
+    refrescar_skins()
 
 
 def elegir_arma(i):
@@ -780,7 +949,7 @@ def comprar(k):
     if n >= NIVEL_MAX:
         return
     if S.puntos < costo(n):
-        poner(m_aviso, 'No te alcanzan los puntos.')
+        poner(m_aviso, 'No te alcanzan las chapas.')
         return
     S.puntos -= costo(n)
     S.mejoras[i][k] += 1
@@ -819,7 +988,7 @@ def refrescar_menu():
     poner_boton(b_modo, 'MODO: BATTLE ROYALE' if S.br else 'MODO: OLEADAS')
     poner(m_info, 'RÉCORD OLEADAS\n' + (f'Oleada {S.record_ola}  ·  {S.record_bajas} bajas' if S.record_ola else 'Todavía sin récord')
           + '\n\nMEJOR PUESTO BR\n' + (f'#{S.mejor_puesto}' if S.mejor_puesto else 'Todavía sin puesto')
-          + f'\n\nPUNTOS\n{S.puntos}\n\nDIFICULTAD\n{DIFICULTADES[S.dif][0]}')
+          + f'\n\nCHAPAS\n{S.puntos}\n\nDIFICULTAD\n{DIFICULTADES[S.dif][0]}\n\nSKIN\n{SKINS[S.skin]["n"]}')
     # ARMERÍA
     for k, m in enumerate(marcos):
         m.enabled = (k == i)
@@ -832,16 +1001,19 @@ def refrescar_menu():
         if n < NIVEL_MAX:
             sig_n = list(S.mejoras[i])
             sig_n[k] += 1
-            poner(t, f'{nombre}: {fmt(clave, actual)}  ->  {fmt(clave, ef(i, sig_n)[clave])}')
-            poner_boton(b, f'Nv {n}/{NIVEL_MAX} · {costo(n)} pts')
+            poner(t, f'{nombre}: {fmt(clave, actual)} -> {fmt(clave, ef(i, sig_n)[clave])}')
+            poner_boton(b, f'Nv {n}/{NIVEL_MAX} · {costo(n)} chapas')
         else:
             poner(t, f'{nombre}: {fmt(clave, actual)}  (máximo)')
             poner_boton(b, 'MÁXIMO')
-    poner(m_puntos, f'Puntos: {S.puntos}')
+    poner(m_puntos, f'Chapas: {S.puntos}')
     # AJUSTES
     poner(v_sens, str(S.sens))
     poner(v_fov, str(S.fov))
     poner(v_dif, DIFICULTADES[S.dif][0])
+    for campo, t in v_graf.items():
+        poner(t, OPC_G[campo][getattr(S, campo)])
+    refrescar_skins()
 
 
 CONTROLES = ('W A S D  mover\nShift  correr     Espacio  saltar\nClic  disparar     Clic derecho  zoom\n'
@@ -851,16 +1023,21 @@ CONTROLES = ('W A S D  mover\nShift  correr     Espacio  saltar\nClic  disparar 
 p_principal = Entity(parent=menu)
 p_armas = Entity(parent=menu)
 p_config = Entity(parent=menu)
-paneles = {'principal': p_principal, 'armas': p_armas, 'config': p_config}
+p_casillero = Entity(parent=menu)
+p_tienda = Entity(parent=menu)
+p_graf = Entity(parent=menu)
+paneles = {'principal': p_principal, 'armas': p_armas, 'casillero': p_casillero, 'tienda': p_tienda,
+           'graficos': p_graf, 'config': p_config}
 
 panel(menu, (-.58, -.035), (.66, .93), a=.82, z=.5)                 # paneles laterales
 panel(menu, (.58, -.035), (.66, .93), a=.82, z=.5)
 panel(menu, (-.25, -.035), (.004, .93), ORO, 1, .45)                # filos dorados
 panel(menu, (.25, -.035), (.004, .93), ORO, 1, .45)
 panel(menu, (0, .46), (1.9, .085), a=.8, z=.45)                     # barra de pestañas
-for _n, _t in (('principal', 'JUGAR'), ('armas', 'ARMERÍA'), ('config', 'AJUSTES')):
-    boton(menu, _t, (TAB_X[_n], .46), lambda n=_n: mostrar_panel(n), .26, .06, '#14110d', '#4a3a22')
-subray = panel(menu, (-.3, .425), (.26, .006), ORO, 1, .1)
+for _n, _t in (('principal', 'JUGAR'), ('armas', 'ARMERÍA'), ('casillero', 'CASILLERO'),
+               ('tienda', 'TIENDA'), ('graficos', 'GRÁFICOS'), ('config', 'AJUSTES')):
+    boton(menu, _t, (TAB_X[_n], .46), lambda n=_n: mostrar_panel(n), .21, .06, '#14110d', '#4a3a22')
+subray = panel(menu, (-.55, .425), (.21, .006), ORO, 1, .1)
 
 # pestaña JUGAR
 m_titulo = texto(p_principal, '', (-.86, .39), 3, ORO, (-.5, .5))
@@ -885,12 +1062,286 @@ m_arma_d = texto(p_armas, '', (.3, .315), 1.0, GRIS, (-.5, .5))
 filas_mej = []
 for _k in range(len(MEJORAS)):
     _y = .2 - _k * .1
-    filas_mej.append((texto(p_armas, '', (.3, _y), 1.05, CREMA, (-.5, 0)),
-                      boton(p_armas, ' ', (.76, _y), lambda k=_k: comprar(k), .26, .065)))
+    filas_mej.append((texto(p_armas, '', (.3, _y), .9, CREMA, (-.5, 0)),
+                      boton(p_armas, ' ', (.74, _y), lambda k=_k: comprar(k), .34, .065)))
 m_puntos = texto(p_armas, '', (.3, -.2), 1.4, ORO, (-.5, 0))
 m_aviso = texto(p_armas, '', (.3, -.27), 1.0, '#e8472d', (-.5, 0))
-texto(p_armas, 'Ganás puntos eliminando enemigos\ny superando oleadas. Las mejoras\nse guardan para la próxima vez.',
+texto(p_armas, 'Ganás chapas eliminando enemigos\ny superando oleadas. Las mejoras\nse guardan para la próxima vez.',
       (.3, -.34), .8, GRIS, (-.5, .5))
+
+# pestañas CASILLERO y TIENDA (skins)
+_cache_tienda = [None, None]
+
+
+def tienda_ids():
+    """Las 6 skins de la tienda de hoy: 1 legendaria, 2 épicas, 2 raras y 1 común. Cambian cada día."""
+    dia = int(ahora() // 86400)
+    if _cache_tienda[0] != dia:
+        rnd = random.Random(dia)
+        ids = []
+        for r, n in ((3, 1), (2, 2), (1, 2), (0, 1)):
+            pool = [i for i, sk in enumerate(SKINS) if sk['r'] == r and sk['precio'] > 0]
+            ids += rnd.sample(pool, min(n, len(pool)))
+        _cache_tienda[0], _cache_tienda[1] = dia, ids
+    return _cache_tienda[1]
+
+
+def icono_skin(padre, pos, alto, sk):
+    """'Foto' de la skin: un soldadito dibujado con rectángulos de colores."""
+    g = Entity(parent=padre, position=(pos[0], pos[1], -.05))
+    k = alto / 1.1
+    n = [0]
+
+    def q(x, y, w, h, col):
+        Entity(parent=g, model='quad', position=(x * k, y * k, -.01 * n[0]), scale=(w * k, h * k), color=C(col), **UI)
+        n[0] += 1
+    NEG = '#17191b'
+    for lado in (-1, 1):
+        q(lado * .1, -.3, .17, .4, sk['pantalon'])
+        q(lado * .1, -.47, .19, .08, NEG)
+        q(lado * .27, .07, .1, .32, sk['ropa'])
+    q(0, .05, .38, .36, sk['ropa'])
+    q(0, .06, .32, .28, sk['chaleco'])
+    q(0, -.12, .38, .04, NEG)
+    q(0, .34, .2, .2, NEG)
+    q(0, .44, .25, .09, sk['casco'])
+    q(0, .33, .15, .05, sk.get('lentes', '#5d8794'))
+    if sk.get('cresta'):
+        q(0, .53, .06, .1, sk['cresta'])
+    if sk.get('hombreras'):
+        for lado in (-1, 1):
+            q(lado * .27, .22, .14, .07, sk['hombreras'])
+    if sk.get('neon'):
+        q(0, -.12, .39, .02, sk['neon'])
+        q(0, .16, .3, .02, sk['neon'])
+    return g
+
+
+def crear_tarjeta(padre, pos, ancho, alto, accion, esc):
+    """Tarjeta de una skin: marco del color de su rareza, dibujo, nombre y estado."""
+    x, y = pos
+    g = Entity(parent=padre)             # grupo: sirve para esconder la tarjeta entera
+    t = dict(sid=-1, padre=g, grupo=g, pos=pos, alto=alto, icono=None)
+    t['sel'] = panel(g, (x, y), (ancho + .014, alto + .014), CREMA, 1, .36)
+    t['marco'] = panel(g, (x, y), (ancho, alto), '#808080', 1, .3)
+    t['btn'] = boton(g, ' ', (x, y), accion, ancho - .012, alto - .012, '#1d1813', '#3a3025')
+    t['velo'] = panel(g, (x, y), (ancho - .012, alto - .012), '#0b0907', .6, -.3)
+    t['nombre'] = texto(g, '', (x, y + alto / 2 - .02), esc, CREMA)
+    t['nombre'].z = -.4
+    t['estado'] = texto(g, '', (x, y - alto / 2 + .02), esc * .9, GRIS)
+    t['estado'].z = -.4
+    return t
+
+
+def actualizar_tarjeta(t, i, estado, col_estado, velo, sel):
+    sk = SKINS[i]
+    t['grupo'].enabled = True
+    if t['sid'] != i:
+        t['sid'] = i
+        if t['icono'] is not None:
+            destroy(t['icono'])
+        t['icono'] = icono_skin(t['padre'], (t['pos'][0], t['pos'][1] + t['alto'] * .01), t['alto'] * .5, sk)
+        t['marco'].color = C(RAREZA[sk['r']][1])
+        poner(t['nombre'], sk['n'].upper())
+    poner(t['estado'], estado)
+    t['estado'].color = C(col_estado)
+    t['velo'].enabled = velo
+    t['sel'].enabled = sel
+
+
+def crear_detalle(padre, tab):
+    d = {}
+    d['nombre'] = texto(padre, '', (.3, .39), 1.8, ORO, (-.5, .5))
+    d['rareza'] = texto(padre, '', (.3, .32), 1.0, GRIS, (-.5, .5))
+    d['desc'] = texto(padre, '', (.3, .26), 1.0, CREMA, (-.5, .5))
+    d['precio'] = texto(padre, '', (.3, .08), 1.3, ORO, (-.5, 0))
+    d['btn'] = boton(padre, ' ', (.58, -.03), lambda: accion_skin(tab), .5, .09, '#e8d82a', '#fff25a', '#14110d')
+    d['puntos'] = texto(padre, '', (.3, -.14), 1.2, ORO, (-.5, 0))
+    d['aviso'] = texto(padre, '', (.3, -.21), 1.0, '#e8472d', (-.5, 0))
+    if tab == 'tienda':
+        ayuda = 'La tienda se renueva todos los días.\nGanás chapas eliminando enemigos\ny superando oleadas.'
+    else:
+        ayuda = 'Las skins son solo estética: no cambian\ntus estadísticas. Algunas pintan\nel color de tus balas.'
+    texto(padre, ayuda, (.3, -.3), .8, GRIS, (-.5, .5))
+    return d
+
+
+def actualizar_detalle(d, tab):
+    i = S.sel_skin
+    sk = SKINS[i]
+    rn, rc = RAREZA[sk['r']]
+    poner(d['nombre'], sk['n'].upper())
+    poner(d['rareza'], rn)
+    d['rareza'].color = C(rc)
+    poner(d['desc'], sk['d'])
+    if S.skin == i:
+        txt, precio = 'EQUIPADA', 'Es tu skin actual'
+    elif i in S.skins:
+        txt, precio = 'EQUIPAR', 'En tu casillero'
+    elif tab == 'tienda':
+        txt, precio = f'COMPRAR  {sk["precio"]} chapas', f'Precio: {sk["precio"]} chapas'
+    else:
+        txt, precio = 'IR A LA TIENDA', f'Bloqueada  ·  {sk["precio"]} chapas'
+    poner(d['precio'], precio)
+    poner_boton(d['btn'], txt)
+    poner(d['puntos'], f'Tus chapas: {S.puntos}')
+
+
+detalles = {}
+
+
+def aviso_skin(txt):
+    for d in detalles.values():
+        poner(d['aviso'], txt)
+
+
+def elegir_skin(i):
+    S.sel_skin = i
+    aviso_skin('')
+    vista_previa()
+    refrescar_skins()
+
+
+def equipar_skin(i):
+    if i not in S.skins:
+        return
+    S.skin = i
+    reconstruir_fp()
+    aviso_skin('¡Skin equipada!')
+    guardar()
+    refrescar_menu()
+
+
+def comprar_skin(i):
+    if i in S.skins or i not in tienda_ids():
+        return
+    precio = SKINS[i]['precio']
+    if S.puntos < precio:
+        aviso_skin(f'Te faltan {precio - S.puntos} chapas.')
+        return
+    S.puntos -= precio
+    S.skins = sorted(set(S.skins) | {i})
+    aviso_skin('¡Comprada! Ya está en tu casillero.')
+    guardar()
+    refrescar_menu()
+
+
+def accion_skin(tab):
+    i = S.sel_skin
+    if i in S.skins:
+        equipar_skin(i)
+    elif tab == 'tienda':
+        comprar_skin(i)
+    else:
+        mostrar_panel('tienda')
+
+
+def poner_reloj():
+    resto = int(86400 - ahora() % 86400)
+    poner(m_reloj, f'Se renueva en {resto // 3600} h {resto % 3600 // 60} min')
+
+
+def actualizar_reloj():
+    if _cache_tienda[0] != int(ahora() // 86400):
+        refrescar_skins()          # pasó la medianoche: tienda nueva
+    else:
+        poner_reloj()
+
+
+def refrescar_skins():
+    ids = tienda_ids()
+    for slot, t in enumerate(tarj_loc):
+        i = S.pag_loc * PAG + slot
+        if i >= len(SKINS):
+            t['grupo'].enabled = False
+            continue
+        if S.skin == i:
+            est, col = 'EQUIPADA', ORO
+        elif i in S.skins:
+            est, col = 'COMPRADA', GRIS
+        else:
+            est, col = 'BLOQUEADA', '#a86a6a'
+        actualizar_tarjeta(t, i, est, col, i not in S.skins, S.panel == 'casillero' and S.sel_skin == i)
+    for j, t in enumerate(tarj_tienda):
+        i = ids[j]
+        if S.skin == i:
+            est, col = 'EQUIPADA', ORO
+        elif i in S.skins:
+            est, col = 'COMPRADA', GRIS
+        else:
+            est, col = f'{SKINS[i]["precio"]} chapas', ORO
+        actualizar_tarjeta(t, i, est, col, i in S.skins, S.panel == 'tienda' and S.sel_skin == i)
+    actualizar_detalle(detalles['casillero'], 'casillero')
+    actualizar_detalle(detalles['tienda'], 'tienda')
+    poner(m_cont, f'{len(S.skins)} / {len(SKINS)}')
+    poner(m_pag, f'Página {S.pag_loc + 1} / {NPAG}')
+    poner_reloj()
+
+
+# CASILLERO: todas las skins en una grilla (las que no tenés se ven oscuras)
+texto(p_casillero, 'CASILLERO', (-.86, .39), 2.2, ORO, (-.5, .5))
+m_cont = texto(p_casillero, '', (-.3, .375), 1.0, GRIS, (.5, 0))
+NPAG = (len(SKINS) + PAG - 1) // PAG
+tarj_loc = []
+for _i in range(PAG):
+    tarj_loc.append(crear_tarjeta(p_casillero, (-.78 + (_i % 3) * .205, .22 - (_i // 3) * .18), .19, .165,
+                                  lambda sl=_i: elegir_skin(S.pag_loc * PAG + sl), .7))
+
+
+def cambiar_pag(paso):
+    S.pag_loc = (S.pag_loc + paso) % NPAG
+    refrescar_skins()
+
+
+boton(p_casillero, '<', (-.72, -.455), lambda: cambiar_pag(-1), .08, .05)
+m_pag = texto(p_casillero, '', (-.58, -.455), 1.0, CREMA)
+boton(p_casillero, '>', (-.44, -.455), lambda: cambiar_pag(1), .08, .05)
+detalles['casillero'] = crear_detalle(p_casillero, 'casillero')
+
+# TIENDA: 6 skins que cambian todos los días
+texto(p_tienda, 'TIENDA', (-.86, .39), 2.2, ORO, (-.5, .5))
+m_reloj = texto(p_tienda, '', (-.86, .3), .85, GRIS, (-.5, 0))
+tarj_tienda = []
+for _j in range(len(tienda_ids())):
+    tarj_tienda.append(crear_tarjeta(p_tienda, (-.72 + (_j % 2) * .29, .165 - (_j // 2) * .23), .27, .21,
+                                     lambda j=_j: elegir_skin(tienda_ids()[j]), .9))
+detalles['tienda'] = crear_detalle(p_tienda, 'tienda')
+
+# pestaña GRÁFICOS
+texto(p_graf, 'GRÁFICOS', (-.86, .39), 2.2, ORO, (-.5, .5))
+FILAS_G = [('Pantalla completa', 'pant'), ('Límite de FPS', 'fps_lim'), ('Sombras', 'sombras'),
+           ('Distancia de visión', 'dist'), ('Efectos', 'efectos'), ('Suavizado de bordes', 'aa'),
+           ('Mostrar FPS', 'ver_fps')]
+
+
+def cambiar_g(campo, paso):
+    setattr(S, campo, (getattr(S, campo) + paso) % len(OPC_G[campo]))
+    aplicar_graficos()
+    refrescar_menu()
+    guardar()
+
+
+def preset_g(n):
+    """Calidad rápida: 0 baja, 1 media, 2 alta (sombras, distancia, efectos y suavizado)."""
+    S.sombras, S.dist, S.efectos, S.aa = n, n, n, (1 if n == 2 else 0)
+    aplicar_graficos()
+    refrescar_menu()
+    guardar()
+
+
+v_graf = {}
+for _k, (_nombre, _campo) in enumerate(FILAS_G):
+    _y = .27 - _k * .09
+    texto(p_graf, _nombre, (-.86, _y), 1.0, CREMA, (-.5, 0))
+    boton(p_graf, '-', (-.5, _y), lambda c=_campo: cambiar_g(c, -1), .06, .06)
+    v_graf[_campo] = texto(p_graf, '', (-.4, _y), 1.1)
+    boton(p_graf, '+', (-.3, _y), lambda c=_campo: cambiar_g(c, 1), .06, .06)
+texto(p_graf, 'El suavizado de bordes se aplica\nal reiniciar el juego.', (-.86, -.37), .8, GRIS, (-.5, .5))
+texto(p_graf, 'CALIDAD RÁPIDA', (.3, .39), 2, ORO, (-.5, .5))
+for _n, _t in enumerate(('BAJA', 'MEDIA', 'ALTA')):
+    boton(p_graf, _t, (.58, .22 - _n * .11), lambda n=_n: preset_g(n), .5, .08)
+texto(p_graf, 'Ajusta sombras, distancia de visión,\nefectos y suavizado de una vez.\n\nSi el juego va lento, probá Baja\no bajá el límite de FPS.',
+      (.3, -.14), .9, GRIS, (-.5, .5))
 
 # pestaña AJUSTES
 texto(p_config, 'AJUSTES', (-.86, .39), 3, ORO, (-.5, .5))
@@ -916,10 +1367,11 @@ texto(p_config, CONTROLES, (.3, .3), 1.0, CREMA, (-.5, .5))
 # --- vitrina: un rincón lejano del mapa, tipo lobby, donde el soldado posa en el centro del menú
 VITRINA_Z = 300
 soldado_menu = None
+vitrina_ent = None
 
 
 def construir_vitrina():
-    global soldado_menu
+    global soldado_menu, vitrina_ent
     v = Entity(position=(0, 0, VITRINA_Z))
     pieza(v, (0, -.5, 30), (200, 1, 200), '#3b2f45', texture=T_RUIDO)           # piso de la plaza
     pieza(v, (0, -.15, 3.2), (5, .3, 5), '#1a1a24')                             # plataforma
@@ -932,9 +1384,26 @@ def construir_vitrina():
         h = random.uniform(10, 20)                                              # torres con neón
         pieza(v, (x, h / 2, 26), (4, h, 4), '#241d2e')
         pieza(v, (x, h / 2, 23.9), (.5, h * .9, .1), col, **UI)
-    soldado_menu = construir_soldado(v, 'negro', S.arma_inicial)
+    vitrina_ent = v
+    S.skin_vista = S.skin
+    soldado_menu = construir_soldado(v, SKINS[S.skin], S.arma_inicial)
     soldado_menu.position = (0, .04, 3.2)
     soldado_menu.rotation_y = 160
+
+
+def vista_previa():
+    """El soldado del menú muestra la skin que estás mirando (casillero/tienda) o la equipada."""
+    global soldado_menu
+    i = S.sel_skin if S.panel in ('casillero', 'tienda') else S.skin
+    if soldado_menu is not None and i == S.skin_vista:
+        return
+    S.skin_vista = i
+    ry = soldado_menu.rotation_y if soldado_menu is not None else 160
+    if soldado_menu is not None:
+        destroy(soldado_menu)
+    soldado_menu = construir_soldado(vitrina_ent, SKINS[i], S.arma_inicial)
+    soldado_menu.position = (0, .04, 3.2)
+    soldado_menu.rotation_y = ry
 
 
 def vitrina_arma(i):
@@ -988,7 +1457,7 @@ def entrar_al_juego():
 
 # ------------------------------------------------------------------ efectos
 def chispas(pos, col, n, vel, tam, vida=.5):
-    for _ in range(n):
+    for _ in range(max(1, int(round(n * EFECTOS[S.efectos])))):
         p = Entity(model='cube', position=pos, scale=tam, color=C(col), **UI)
         d = Vec3(random.uniform(-1, 1), random.uniform(0, 1.2), random.uniform(-1, 1)).normalized()
         p.animate_position(pos + d * random.uniform(.4, 1) * vel * vida, duration=vida, curve=curve.out_quad)
@@ -1453,7 +1922,7 @@ def dano_jugador(n):
             S.puntos += premio
             if S.mejor_puesto == 0 or puesto < S.mejor_puesto:
                 S.mejor_puesto = puesto
-            abrir_menu('ELIMINADO', f'Puesto #{puesto} de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} pts',
+            abrir_menu('ELIMINADO', f'Puesto #{puesto} de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} chapas',
                        'JUGAR DE NUEVO', 'SALIR AL MENÚ')
             return
         sub = f'Llegaste a la oleada {S.ola}\ncon {S.bajas} bajas.'
@@ -1468,7 +1937,7 @@ def victoria():
     premio = S.bajas * 15 + 100 + N_BOTS * 8
     S.puntos += premio
     S.mejor_puesto = 1
-    abrir_menu('¡VICTORIA\nMAGISTRAL!', f'Puesto #1 de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} pts',
+    abrir_menu('¡VICTORIA\nMAGISTRAL!', f'Puesto #1 de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} chapas',
                'JUGAR DE NUEVO', 'SALIR AL MENÚ')
 
 
@@ -1482,7 +1951,7 @@ def siguiente_ola():
         dar_municion()
         curar(15)
         S.granadas = min(4, S.granadas + 1)
-        mensaje(f'Oleada {S.ola}   +{premio} pts')
+        mensaje(f'Oleada {S.ola}   +{premio} chapas')
     else:
         mensaje(f'Oleada {S.ola}')
 
@@ -1574,7 +2043,7 @@ def disparar():
                 tiro.entity.golpe(a['dano'])
             else:
                 chispas(fin, '#ffc060', 5, 5, .04, .35)
-        trazador(boca, fin, '#ffd28a')
+        trazador(boca, fin, color_traza())
 
 
 def recargar():
@@ -1648,6 +2117,10 @@ def update():
     dt = time.dt
     if S.modo != 'juego':
         soldado_menu.rotation_y += 28 * dt        # el soldado gira despacio en el menú
+        S.t_reloj -= dt
+        if S.t_reloj <= 0:
+            S.t_reloj = 1.0
+            actualizar_reloj()
         return
     a = ef(S.arma)
 
@@ -1744,7 +2217,7 @@ def update():
         S.hp_nivel = nivel
         b_hp.color = C(('#5aa04a', '#d9a441', '#c4452d')[nivel])
     poner(t_hp, str(int(math.ceil(hp))))
-    poner(t_puntos, f'PUNTOS  {S.puntos}')
+    poner(t_puntos, f'CHAPAS  {S.puntos}')
     poner(t_bajas, f'BAJAS  {S.bajas}')
     mapa_g.enabled = bool(S.br)
     if S.br:
@@ -1794,5 +2267,6 @@ construir_vitrina()
 S.municion = [ef(i)['cargador'] for i in range(len(ARMAS))]
 S.reserva = [a['reserva'] for a in ARMAS]
 cambiar_arma(S.arma_inicial)
+aplicar_graficos(True)
 abrir_menu(*TEXTOS_INICIO)
 app.run()
