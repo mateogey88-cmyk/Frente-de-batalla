@@ -123,7 +123,9 @@ except Exception:
     pass
 
 # ------------------------------------------------------------------ mundo de combate
-mundo = Entity()
+mundo = Entity()      # todo lo que bloquea balas y enemigos cuelga de acá
+estatico = Entity()   # parte visual del escenario; al terminar se fusiona en una sola malla
+CAJAS = []            # colisiones del escenario; se juntan en un solo collider
 ruinas = []
 PUNTOS = []
 LADRILLO = ['#6e4a3c', '#7a5442', '#5d3f33', '#8a6249']
@@ -633,6 +635,44 @@ def limpiar():
 
 
 # ------------------------------------------------------------------ COMBATE Y EFECTOS
+class Efectos(Entity):
+    """Chispas y trazadores reciclados: en vez de crear y destruir entidades
+    (y animaciones) en cada disparo, se reusan y se mueven todas juntas acá."""
+    def __init__(self):
+        super().__init__()
+        self.libres = {'chispa': [], 'trazador': []}
+        self.activos = []      # [entidad, tipo, inicio, recorrido, vida, t]
+
+    def tomar(self, tipo, col):
+        libres = self.libres[tipo]
+        if libres:
+            e = libres.pop()
+            e.enabled = True
+        else:
+            e = Entity(model='cube', add_to_scene_entities=False, **UI)
+        e.color = col
+        return e
+
+    def update(self):
+        dt = time.dt
+        quedan = []
+        for q in self.activos:
+            e, tipo, inicio, recorrido, vida, t = q
+            t += dt
+            if t >= vida:
+                e.enabled = False
+                self.libres[tipo].append(e)
+                continue
+            q[5] = t
+            if recorrido is not None:
+                e.position = inicio + recorrido * curve.out_quad(t / vida)
+            quedan.append(q)
+        self.activos = quedan
+
+
+efectos = Efectos()
+
+
 def chispas(pos, col, n, vel, tam, vida=.5):
     col = C(col)
     pos = Vec3(*pos)
@@ -678,6 +718,8 @@ class Enemigo(Entity):
         self.t_lado = 2.0
         self.t_vista = 0.0
         self.ve = False
+        self.t_obstaculo = 0.0
+        self.obstaculo = False
         uniforme = random.choice(('#334155', '#1e293b', '#0f172a'))
         self.cuerpo = Entity(parent=self, model='cube', color=C(uniforme), position=(0, 1.1, 0), scale=(.55, .9, .35), collider='box')
         self.cabeza = Entity(parent=self, model='cube', color=C('#e2e8f0'), position=(0, 1.75, 0), scale=(.32, .32, .32), collider='box')
