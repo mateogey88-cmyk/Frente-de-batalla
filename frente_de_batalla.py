@@ -300,7 +300,7 @@ class ManiquiLobby(Entity):
         # Arma en mano
         self.holder_arma = Entity(parent=self, position=(.2, 1.35, .4), rotation=(15, -15, 5))
         self.modelo_arma = Entity(parent=self.holder_arma, model='cube', scale=(.08, .12, .65), color=C('#22252a'))
-        self.canon_arma = Entity(parent=self.holder_arma, model='cube', scale=(.04, .04, .3), position=(0, .02, .4), color=C('#111'))
+        self.canon_arma = Entity(parent=self.holder_arma, model='cube', scale=(.04, .04, .3), position=(0, .02, .4), color=C('#111111'))
 
         # Placa de nombre flotante arriba del jugador
         self.placa = Entity(parent=self, position=(0, 2.65, 0), billboard=True)
@@ -469,7 +469,7 @@ for i, w in enumerate(ARMAS):
     # Foto / Miniatura 3D del arma dentro de la tarjeta
     visor_3d = Entity(parent=card, position=(0, .01, -.2), rotation=(15, -35, 10))
     cuerpo_mini = Entity(parent=visor_3d, model='cube', scale=(.08, .12, w['largo']), color=C(w['col']))
-    Entity(parent=visor_3d, model='cube', scale=(.04, .04, .25), position=(0, .02, w['largo'] / 2 + .1), color=C('#111'))
+    Entity(parent=visor_3d, model='cube', scale=(.04, .04, .25), position=(0, .02, w['largo'] / 2 + .1), color=C('#111111'))
     mini_armas_3d.append(visor_3d)
 
     # Estadísticas
