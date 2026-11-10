@@ -16,6 +16,8 @@ import random
 
 from ursina import *
 from ursina.prefabs.first_person_controller import FirstPersonController
+from ursina.collider import Collider
+from panda3d.core import CollisionBox, Point3
 
 C = color.hex          # C('#ff9a30') -> color
 
@@ -119,6 +121,8 @@ except Exception:
 
 # ------------------------------------------------------------------ mundo
 mundo = Entity()      # todo lo que bloquea balas y enemigos cuelga de acá
+estatico = Entity()   # parte visual del escenario; al terminar se fusiona en una sola malla
+CAJAS = []            # colisiones del escenario; se juntan en un solo collider
 ruinas = []
 PUNTOS = []           # puntos donde aparecen los enemigos
 LADRILLO = ['#6e4a3c', '#7a5442', '#5d3f33', '#8a6249']
@@ -126,9 +130,25 @@ CONCRETO = ['#6a6762', '#7c786f', '#5a5752']
 
 
 def bloque(x, z, ancho, alto, largo, col, y=0.0, solido=True):
-    return Entity(parent=mundo if solido else None, model='cube',
-                  position=(x, y + alto / 2, z), scale=(ancho, alto, largo),
-                  color=C(col), collider='box' if solido else None)
+    if solido:
+        caja(x, y + alto / 2, z, ancho, alto, largo)
+    return Entity(parent=estatico, model='cube',
+                  position=(x, y + alto / 2, z), scale=(ancho, alto, largo), color=C(col))
+
+
+def caja(x, y, z, ancho, alto, largo):
+    CAJAS.append(CollisionBox(Point3(x, y, z), ancho / 2, alto / 2, largo / 2))
+
+
+def fusionar_escenario():
+    """Cientos de cubos quietos -> 1 malla y 1 collider: mismo aspecto, muchas menos llamadas de dibujo."""
+    malla = estatico.attachNewNode('malla')
+    for e in list(estatico.children):
+        e.model.copyTo(malla).setMat(e.model.getMat(malla))
+        destroy(e)
+    malla.flattenStrong()
+    colision = Entity(parent=mundo)
+    colision.collider = Collider(colision, CAJAS)
 
 
 def cerca_de_ruina(p, radio):
@@ -167,8 +187,8 @@ def construir_mundo():
     # suelo y límites invisibles
     Entity(model='cube', scale=(130, 1, 130), y=-.5, color=C('#5a4631'), collider='box')
     for lado in (-1, 1):
-        Entity(parent=mundo, model='cube', position=(60 * lado, 5, 0), scale=(1, 10, 124), collider='box', visible=False)
-        Entity(parent=mundo, model='cube', position=(0, 5, 60 * lado), scale=(124, 10, 1), collider='box', visible=False)
+        caja(60 * lado, 5, 0, 1, 10, 124)
+        caja(0, 5, 60 * lado, 124, 10, 1)
 
     # edificios en ruinas
     intentos = 0
@@ -222,7 +242,7 @@ def construir_mundo():
     # skyline lejano
     for i in range(40):
         ang, rad, h = i / 40 * math.tau, random.uniform(95, 130), random.uniform(15, 45)
-        Entity(model='cube', color=C('#1e1618'), position=(math.sin(ang) * rad, h / 2, math.cos(ang) * rad),
+        Entity(parent=estatico, model='cube', color=C('#1e1618'), position=(math.sin(ang) * rad, h / 2, math.cos(ang) * rad),
                scale=(random.uniform(8, 20), h, random.uniform(8, 20)))
 
     # puntos de aparición enemiga
@@ -231,6 +251,8 @@ def construir_mundo():
         p = Vec3(max(-56, min(56, math.sin(ang) * rad)), 0, max(-56, min(56, math.cos(ang) * rad)))
         if not cerca_de_ruina(p, 9):
             PUNTOS.append(p)
+
+    fusionar_escenario()
 
 
 # ------------------------------------------------------------------ jugador y arma
@@ -445,18 +467,61 @@ def entrar_al_juego():
 
 
 # ------------------------------------------------------------------ efectos
+class Efectos(Entity):
+    """Chispas y trazadores reciclados: en vez de crear y destruir entidades
+    (y animaciones) en cada disparo, se reusan y se mueven todas juntas acá."""
+    def __init__(self):
+        super().__init__()
+        self.libres = {'chispa': [], 'trazador': []}
+        self.activos = []      # [entidad, tipo, inicio, recorrido, vida, t]
+
+    def tomar(self, tipo, col):
+        libres = self.libres[tipo]
+        if libres:
+            e = libres.pop()
+            e.enabled = True
+        else:
+            e = Entity(model='cube', add_to_scene_entities=False, **UI)
+        e.color = col
+        return e
+
+    def update(self):
+        dt = time.dt
+        quedan = []
+        for q in self.activos:
+            e, tipo, inicio, recorrido, vida, t = q
+            t += dt
+            if t >= vida:
+                e.enabled = False
+                self.libres[tipo].append(e)
+                continue
+            q[5] = t
+            if recorrido is not None:
+                e.position = inicio + recorrido * curve.out_quad(t / vida)
+            quedan.append(q)
+        self.activos = quedan
+
+
+efectos = Efectos()
+
+
 def chispas(pos, col, n, vel, tam, vida=.5):
+    col = C(col)
+    pos = Vec3(*pos)
     for _ in range(n):
-        p = Entity(model='cube', position=pos, scale=tam, color=C(col), **UI)
+        p = efectos.tomar('chispa', col)
+        p.position = pos
+        p.scale = tam
         d = Vec3(random.uniform(-1, 1), random.uniform(0, 1.2), random.uniform(-1, 1)).normalized()
-        p.animate_position(pos + d * random.uniform(.4, 1) * vel * vida, duration=vida, curve=curve.out_quad)
-        destroy(p, delay=vida)
+        efectos.activos.append([p, 'chispa', pos, d * random.uniform(.4, 1) * vel * vida, vida, 0.0])
 
 
 def trazador(a, b, col):
-    t = Entity(model='cube', position=(a + b) / 2, scale=(.03, .03, (b - a).length()), color=C(col), **UI)
+    t = efectos.tomar('trazador', C(col))
+    t.position = (a + b) / 2
+    t.scale = (.03, .03, (b - a).length())
     t.look_at(b)
-    destroy(t, delay=.06)
+    efectos.activos.append([t, 'trazador', None, None, .06, 0.0])
 
 
 def explosion(p):
@@ -486,6 +551,8 @@ class Enemigo(Entity):
         self.t_lado = 2.0
         self.t_vista = 0.0
         self.ve = False
+        self.t_obstaculo = 0.0
+        self.obstaculo = False
         uniforme = random.choice(('#4a5238', '#3f4638', '#56563f'))
         self.cuerpo = Entity(parent=self, model='cube', color=C(uniforme), position=(0, 1.1, 0), scale=(.55, .9, .35), collider='box')
         self.cabeza = Entity(parent=self, model='cube', color=C('#c9a07a'), position=(0, 1.75, 0), scale=(.32, .32, .32), collider='box')
@@ -502,6 +569,7 @@ class Enemigo(Entity):
         self.cool -= dt
         self.t_lado -= dt
         self.t_vista -= dt
+        self.t_obstaculo -= dt
         dx, dz = jugador.x - self.x, jugador.z - self.z
         d = math.hypot(dx, dz) or .001
         dir = Vec3(dx / d, 0, dz / d)
@@ -517,7 +585,10 @@ class Enemigo(Entity):
             self.ve = not raycast(ojos, hacia.normalized(), distance=hacia.length(), traverse_target=mundo).hit
 
         mv = lateral * .6 if (d < self.pref and self.ve) else dir
-        if raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit:
+        if self.t_obstaculo <= 0:      # no hace falta mirar cada frame si hay una pared adelante
+            self.t_obstaculo = .1
+            self.obstaculo = raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit
+        if self.obstaculo:
             mv = lateral
         if d > 1.5:
             self.position += mv * self.vel * dt
