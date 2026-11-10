@@ -540,9 +540,9 @@ DIFICULTADES = [('Fácil', .6), ('Normal', 1.0), ('Difícil', 1.5)]
 
 def fila_config(y, nombre, menos, mas):
     texto(p_config, nombre, (-.5, y), 1.4, origen=(-.5, 0))
-    Button(p_config, text='-', position=(.15, y), scale=(.06, .06), color=C('#1e293b'), on_click=menos, **UI)
+    Button(parent=p_config, text='-', position=(.15, y), scale=(.06, .06), color=C('#1e293b'), on_click=menos, **UI)
     val = texto(p_config, '', (.35, y), 1.4)
-    Button(p_config, text='+', position=(.55, y), scale=(.06, .06), color=C('#1e293b'), on_click=mas, **UI)
+    Button(parent=p_config, text='+', position=(.55, y), scale=(.06, .06), color=C('#1e293b'), on_click=mas, **UI)
     return val
 
 
@@ -577,15 +577,15 @@ def refrescar_cfg_txt():
     perfil_record.text = f'Récord: Ola {S.record_ola}'
 
 
-Button(p_config, text='RESTABLECER RÉCORD', position=(0, -.2), scale=(.38, .06), color=C('#991b1b'), on_click=borrar_record, **UI)
-Button(p_config, text='VOLVER', position=(0, -.3), scale=(.3, .07), color=C('#1e293b'), on_click=lambda: mostrar_panel('lobby'), **UI)
+Button(parent=p_config, text='RESTABLECER RÉCORD', position=(0, -.2), scale=(.38, .06), color=C('#991b1b'), on_click=borrar_record, **UI)
+Button(parent=p_config, text='VOLVER', position=(0, -.3), scale=(.3, .07), color=C('#1e293b'), on_click=lambda: mostrar_panel('lobby'), **UI)
 
 # --- PANEL PAUSA Y GAME OVER
 Entity(parent=p_pausa, model='quad', scale=(2, 1.2), color=C('#050811e5'), z=1, **UI)
 pausa_titulo = texto(p_pausa, 'PAUSA', (0, .28), 3.5, ORO)
 pausa_sub = texto(p_pausa, 'Combate suspendido temporalmente', (0, .18), 1.2, '#94a3b8')
-b_pausa_reanudar = Button(p_pausa, text='CONTINUAR', position=(0, .02), scale=(.4, .08), color=C('#22c55e'), on_click=lambda: entrar_al_juego(), **UI)
-Button(p_pausa, text='SALIR AL MENÚ PRINCIPAL', position=(0, -.12), scale=(.4, .08), color=C('#1e293b'), on_click=lambda: volver_al_menu(), **UI)
+b_pausa_reanudar = Button(parent=p_pausa, text='CONTINUAR', position=(0, .02), scale=(.4, .08), color=C('#22c55e'), on_click=lambda: entrar_al_juego(), **UI)
+Button(parent=p_pausa, text='SALIR AL MENÚ PRINCIPAL', position=(0, -.12), scale=(.4, .08), color=C('#1e293b'), on_click=lambda: volver_al_menu(), **UI)
 
 
 # ------------------------------------------------------------------ CONTROL DEL FLUJO
