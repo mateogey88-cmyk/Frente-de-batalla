@@ -7,6 +7,7 @@ FRENTE DE BATALLA - shooter 3D en primera persona (Python + Ursina)
 W A S D mover | Shift correr | Espacio saltar | Mouse apuntar
 Clic disparar | Clic derecho zoom | 1-4 o rueda: cambiar arma
 R recargar | G granada | Esc o P pausa
+Battle Royale: Z pared | X piso | C rampa | Q salir de construcción
 
 Las opciones, los puntos, las mejoras de armas y el récord se guardan en
 frente_de_batalla.json (en tu carpeta de usuario).
@@ -38,6 +39,14 @@ NIVEL_MAX = 5
 MEJORAS = [('Daño', 'dano'), ('Cargador', 'cargador'), ('Cadencia', 'ritmo'), ('Recarga', 'recarga')]
 DIFICULTADES = [('Fácil', .6), ('Normal', 1.0), ('Difícil', 1.5)]   # (nombre, daño que te hacen)
 
+# --- Battle Royale
+N_BOTS = 15                       # soldados rivales (vos sos el 16.º)
+LADO, ALTO, COSTO_PIEZA = 4, 3, 10   # tamaño de la grilla de construcción, alto de un piso y costo en materiales
+HD = [(0, 1), (1, 0), (0, -1), (-1, 0)]   # hacia dónde mirás: +z, +x, -z, -x
+# (radio final, segundos de espera, segundos que tarda en cerrarse, daño por segundo fuera de la zona)
+FASES = [(62, 30, 22, 1), (42, 22, 18, 2), (26, 18, 15, 4), (14, 14, 12, 7), (5, 10, 10, 10)]
+BEAM = {'arma': '#ffd34a', 'municion': '#ff9a30', 'salud': '#5aff7a', 'materiales': '#6ab7ff', 'granada': '#c8c8c8'}
+
 
 class S:
     """Todo el estado del juego en un solo lugar."""
@@ -51,6 +60,8 @@ class S:
     record_ola = 0
     record_bajas = 0
     puntos = 0
+    br = 0                        # 0 = oleadas, 1 = battle royale
+    mejor_puesto = 0
     mejoras = [[0, 0, 0, 0] for _ in ARMAS]
     # partida
     hp = 100.0
@@ -78,6 +89,18 @@ class S:
     guardada = None               # posición del jugador mientras está el menú de pausa
     enemigos = []
     recogibles = []
+    # battle royale
+    tiene = [True, True, True, True]   # qué armas tenés
+    materiales = 0
+    construyendo = None           # 'pared' | 'piso' | 'rampa' | None
+    t_construir = 0.0
+    piezas = {}
+    fant_ok = None
+    en_tormenta = False
+    zona_clave = None
+    z_estado, z_fase, z_t, z_dur, z_dps = 'final', 0, 0.0, 1.0, 1
+    z_r, z_cx, z_cz = 85.0, 0.0, 0.0
+    z_r0 = z_x0 = z_z0 = z_r1 = z_x1 = z_z1 = 0.0
 
 
 def ef(i, mej=None):
@@ -105,7 +128,7 @@ def fmt(clave, v):
 
 # ------------------------------------------------------------------ opciones guardadas
 RUTA = os.path.join(os.path.expanduser('~'), 'frente_de_batalla.json')
-INTS = ('fov', 'sens', 'dif', 'arma_inicial', 'record_ola', 'record_bajas', 'puntos')
+INTS = ('fov', 'sens', 'dif', 'arma_inicial', 'record_ola', 'record_bajas', 'puntos', 'br', 'mejor_puesto')
 
 
 def guardar():
@@ -135,6 +158,7 @@ def cargar():
     S.dif = max(0, min(2, S.dif))
     S.arma_inicial = max(0, min(len(ARMAS) - 1, S.arma_inicial))
     S.puntos = max(0, S.puntos)
+    S.br = 1 if S.br else 0
 
 
 cargar()
@@ -189,53 +213,62 @@ def pieza(padre, pos, esc, col, **kw):
     return Entity(parent=padre, model='cube', position=pos, scale=esc, color=C(col), **kw)
 
 
+_M, _D, _W, _V = '#17191c', '#2c2f34', '#6b4a2b', '#3b4332'
+# Cada arma es una lista de cajas: (posición, tamaño, color[, extras]). El frente apunta a +z.
+PARTES = [
+    [   # fusil de asalto
+        ((0, 0, 0), (.06, .085, .36), _D),
+        ((0, -.005, .3), (.07, .07, .26), _M),
+        ((0, .012, .52), (.022, .022, .2), _M),
+        ((0, .012, .63), (.04, .04, .07), _M),
+        ((0, -.02, -.3), (.05, .1, .24), _V),
+        ((0, -.095, -.07), (.04, .11, .05), _D, dict(rotation_x=10)),
+        ((0, -.13, .07), (.045, .17, .075), _M, dict(rotation_x=-8)),
+        ((0, .07, 0), (.035, .04, .16), _M),
+    ],
+    [   # pistola
+        ((0, .02, .1), (.04, .05, .24), _D),
+        ((0, -.012, .09), (.04, .035, .22), _M),
+        ((0, -.09, -.01), (.04, .12, .06), _D, dict(rotation_x=-12)),
+        ((0, -.05, .06), (.03, .01, .07), _M),
+        ((0, .02, .24), (.02, .02, .04), _M),
+        ((0, .052, 0), (.02, .015, .02), _M),
+    ],
+    [   # escopeta
+        ((0, 0, 0), (.065, .085, .28), _D),
+        ((0, .02, .5), (.04, .04, .55), _M),
+        ((0, -.025, .45), (.035, .035, .42), _M),
+        ((0, -.03, .34), (.065, .055, .18), _W),
+        ((0, -.03, -.3), (.055, .12, .3), _W),
+        ((0, -.08, -.1), (.04, .1, .05), _D),
+        ((0, .045, .76), (.012, .025, .012), _M),
+    ],
+    [   # francotirador
+        ((0, 0, .05), (.055, .08, .42), _M),
+        ((0, -.02, -.33), (.055, .11, .32), _V),
+        ((0, .04, -.3), (.05, .04, .18), _V),
+        ((0, .012, .65), (.028, .028, .75), _M),
+        ((0, .012, 1.03), (.045, .045, .08), _M),
+        ((0, .085, .08), (.05, .05, .3), _D),
+        ((0, .085, .26), (.065, .065, .07), _D),
+        ((0, .085, -.07), (.058, .058, .06), _D),
+        ((.055, .02, -.05), (.05, .015, .015), _M),
+        ((0, -.09, .07), (.045, .1, .09), _M),
+        ((0, -.09, -.12), (.04, .1, .05), _D),
+    ],
+]
+GUANTES = [[(0, -.115, -.07), (0, -.03, .3)], [(0, -.1, -.02), (0, -.05, .06)],
+           [(0, -.14, -.1), (0, -.04, .34)], [(0, -.115, -.12), (0, -.04, .2)]]
+
+
 def armar_arma(padre, i, manos=False):
-    """Modelo 3D de cada arma, hecho de cajas. El frente del arma apunta a +z."""
+    """Modelo 3D de cada arma, armado con las cajas de PARTES."""
     g = Entity(parent=padre)
-    M, D, W, V, N = '#17191c', '#2c2f34', '#6b4a2b', '#3b4332', '#101112'
-    if i == 0:      # fusil de asalto
-        pieza(g, (0, 0, 0), (.06, .085, .36), D)
-        pieza(g, (0, -.005, .3), (.07, .07, .26), M)
-        pieza(g, (0, .012, .52), (.022, .022, .2), M)
-        pieza(g, (0, .012, .63), (.04, .04, .07), M)
-        pieza(g, (0, -.02, -.3), (.05, .1, .24), V)
-        pieza(g, (0, -.095, -.07), (.04, .11, .05), D, rotation_x=10)
-        pieza(g, (0, -.13, .07), (.045, .17, .075), M, rotation_x=-8)
-        pieza(g, (0, .07, 0), (.035, .04, .16), M)
-        gl = [(0, -.115, -.07), (0, -.03, .3)]
-    elif i == 1:    # pistola
-        pieza(g, (0, .02, .1), (.04, .05, .24), D)
-        pieza(g, (0, -.012, .09), (.04, .035, .22), M)
-        pieza(g, (0, -.09, -.01), (.04, .12, .06), D, rotation_x=-12)
-        pieza(g, (0, -.05, .06), (.03, .01, .07), M)
-        pieza(g, (0, .02, .24), (.02, .02, .04), M)
-        pieza(g, (0, .052, .0), (.02, .015, .02), M)
-        gl = [(0, -.1, -.02), (0, -.05, .06)]
-    elif i == 2:    # escopeta
-        pieza(g, (0, 0, 0), (.065, .085, .28), D)
-        pieza(g, (0, .02, .5), (.04, .04, .55), M)
-        pieza(g, (0, -.025, .45), (.035, .035, .42), M)
-        pieza(g, (0, -.03, .34), (.065, .055, .18), W)
-        pieza(g, (0, -.03, -.3), (.055, .12, .3), W)
-        pieza(g, (0, -.08, -.1), (.04, .1, .05), D)
-        pieza(g, (0, .045, .76), (.012, .025, .012), M)
-        gl = [(0, -.14, -.1), (0, -.04, .34)]
-    else:           # francotirador
-        pieza(g, (0, 0, .05), (.055, .08, .42), M)
-        pieza(g, (0, -.02, -.33), (.055, .11, .32), V)
-        pieza(g, (0, .04, -.3), (.05, .04, .18), V)
-        pieza(g, (0, .012, .65), (.028, .028, .75), M)
-        pieza(g, (0, .012, 1.03), (.045, .045, .08), M)
-        pieza(g, (0, .085, .08), (.05, .05, .3), D)
-        pieza(g, (0, .085, .26), (.065, .065, .07), D)
-        pieza(g, (0, .085, -.07), (.058, .058, .06), D)
-        pieza(g, (.055, .02, -.05), (.05, .015, .015), M)
-        pieza(g, (0, -.09, .07), (.045, .1, .09), M)
-        pieza(g, (0, -.09, -.12), (.04, .1, .05), D)
-        gl = [(0, -.115, -.12), (0, -.04, .2)]
-    if manos:
-        pieza(g, gl[0], (.065, .07, .09), N)
-        pieza(g, gl[1], (.075, .06, .11), N)
+    for parte in PARTES[i]:
+        pieza(g, parte[0], parte[1], parte[2], **(parte[3] if len(parte) > 3 else {}))
+    if manos:      # guantes (solo en primera persona)
+        pieza(g, GUANTES[i][0], (.065, .07, .09), '#101112')
+        pieza(g, GUANTES[i][1], (.075, .06, .11), '#101112')
     return g
 
 
@@ -551,6 +584,7 @@ fogonazo = Entity(parent=arma, model='cube', color=C('#ffd070'), scale=(.12, .12
 
 def cambiar_arma(i):
     S.arma, S.recargando, S.enfriamiento = i, False, .3
+    S.construyendo = None
     for k, m in enumerate(modelos_fp):
         m.enabled = (k == i)
     x, y, z, esc = ARMA_FP[i]
@@ -621,6 +655,19 @@ for _i in range(len(ARMAS)):
 
 t_msg = texto(hud, '', (0, .3), 2.2, ORO)
 t_estado = texto(hud, '', (0, -.1), 1.3)
+t_hint = texto(hud, '', (0, -.2), 1.0, '#4fe3ff')
+
+MAPA, MAPA_X, MAPA_Y = .24, .74, .27                                # minimapa con la zona (Battle Royale)
+mapa_g = Entity(parent=hud, enabled=False)
+panel(mapa_g, (MAPA_X, MAPA_Y), (MAPA, MAPA), '#0b0907', .6, .2)
+mapa_pts = [Entity(parent=mapa_g, model='quad', color=C('#a56bff'), scale=.007, **UI) for _ in range(28)]
+mapa_yo = Entity(parent=mapa_g, model='quad', color=C('#ffe14a'), scale=.011, **UI)
+
+fantasma = Entity(model='cube', color=C('#4fe3ff'), enabled=False, **UI)   # muestra dónde va la pieza
+fantasma.alpha = .35
+muro_zona = [Entity(model='cube', color=C('#8a3cff'), enabled=False, **UI) for _ in range(40)]   # pared de la tormenta
+for _m in muro_zona:
+    _m.alpha = .3
 
 mira_g = Entity(parent=hud)                                         # mira que se abre al moverte y disparar
 mira = [Entity(parent=mira_g, model='quad', color=C(CREMA), scale=_e, **UI)
@@ -640,10 +687,25 @@ def mensaje(txt):
     S.t_msg = 1.8
 
 
-# --- menú: botones a los costados, el soldado queda en el centro
-def boton(padre, txt, pos, accion, ancho=.5, alto=.08):
-    return Button(parent=padre, text=txt, position=pos, scale=(ancho, alto), color=C('#1d1813'),
-                  highlight_color=C('#6a4f2a'), pressed_color=C('#8a6a30'), on_click=accion, **UI)
+# --- menú: pestañas arriba (JUGAR / ARMERÍA / AJUSTES); el soldado queda en el centro
+def boton(padre, txt, pos, accion, ancho=.5, alto=.08, col='#1d1813', hl='#6a4f2a', txt_col=None):
+    extra = dict(text_color=C(txt_col)) if txt_col else {}
+    return Button(parent=padre, text=txt, position=pos, scale=(ancho, alto), color=C(col),
+                  highlight_color=C(hl), pressed_color=C('#8a6a30'), on_click=accion, **extra, **UI)
+
+
+def icono_arma(padre, i, pos, ancho_max=.42, alto_max=.1):
+    """'Foto' del arma: se dibuja de costado con rectángulos de colores (usa las mismas cajas que el modelo 3D)."""
+    partes = PARTES[i]
+    zs = [p[0][2] - p[1][2] / 2 for p in partes] + [p[0][2] + p[1][2] / 2 for p in partes]
+    ys = [p[0][1] - p[1][1] / 2 for p in partes] + [p[0][1] + p[1][1] / 2 for p in partes]
+    k = min(ancho_max / (max(zs) - min(zs)), alto_max / (max(ys) - min(ys)))
+    cz, cy = (max(zs) + min(zs)) / 2, (max(ys) + min(ys)) / 2
+    g = Entity(parent=padre, position=(pos[0], pos[1], -.05))
+    for n, p in enumerate(partes):
+        Entity(parent=g, model='quad', position=((p[0][2] - cz) * k, (p[0][1] - cy) * k, -.01 * n),
+               scale=(p[1][2] * k, p[1][1] * k), color=C(p[2]), **UI)
+    return g
 
 
 def limpiar():
@@ -651,9 +713,13 @@ def limpiar():
         destroy(e)
     S.enemigos.clear()
     S.recogibles.clear()
+    for pz in list(S.piezas.values()):
+        destroy(pz)
+    S.piezas = {}
 
 
 TEXTOS_INICIO = ('FRENTE DE\nBATALLA', 'Un soldado, una línea,\nsin refuerzos.\nResistí las oleadas.', 'JUGAR', 'SALIR')
+TAB_X = {'principal': -.3, 'armas': 0, 'config': .3}
 
 
 def accion_jugar():
@@ -676,6 +742,7 @@ def mostrar_panel(nombre):
     S.panel = nombre
     for n, pn in paneles.items():
         pn.enabled = (n == nombre)
+    subray.x = TAB_X[nombre]
 
 
 def elegir_arma(i):
@@ -715,6 +782,12 @@ def cambiar(campo, paso):
     guardar()
 
 
+def cambiar_modo():
+    S.br = 1 - S.br
+    guardar()
+    refrescar_menu()
+
+
 def borrar_record():
     S.record_ola = S.record_bajas = 0
     guardar()
@@ -723,12 +796,14 @@ def borrar_record():
 
 def refrescar_menu():
     i = S.arma_inicial
-    # panel principal
-    poner(m_info, 'RÉCORD\n' + (f'Oleada {S.record_ola}  ·  {S.record_bajas} bajas' if S.record_ola else 'Todavía sin récord')
-          + f'\n\nPUNTOS\n{S.puntos}\n\nARMA\n{ARMAS[i]["n"]}\n\nDIFICULTAD\n{DIFICULTADES[S.dif][0]}')
-    # armería
-    for k, b in enumerate(b_armas):
-        b.text = f'[ {ARMAS[k]["n"]} ]' if k == i else ARMAS[k]['n']
+    # JUGAR
+    b_modo.text = 'MODO: BATTLE ROYALE' if S.br else 'MODO: OLEADAS'
+    poner(m_info, 'RÉCORD OLEADAS\n' + (f'Oleada {S.record_ola}  ·  {S.record_bajas} bajas' if S.record_ola else 'Todavía sin récord')
+          + '\n\nMEJOR PUESTO BR\n' + (f'#{S.mejor_puesto}' if S.mejor_puesto else 'Todavía sin puesto')
+          + f'\n\nPUNTOS\n{S.puntos}\n\nDIFICULTAD\n{DIFICULTADES[S.dif][0]}')
+    # ARMERÍA
+    for k, m in enumerate(marcos):
+        m.enabled = (k == i)
     poner(m_arma_t, ARMAS[i]['n'].upper())
     poner(m_arma_d, DESC[i])
     for k, (nombre, clave) in enumerate(MEJORAS):
@@ -744,43 +819,53 @@ def refrescar_menu():
             poner(t, f'{nombre}: {fmt(clave, actual)}  (máximo)')
             b.text = 'MÁXIMO'
     poner(m_puntos, f'Puntos: {S.puntos}')
-    # configuración
+    # AJUSTES
     poner(v_sens, str(S.sens))
     poner(v_fov, str(S.fov))
     poner(v_dif, DIFICULTADES[S.dif][0])
 
+
+CONTROLES = ('W A S D  mover\nShift  correr     Espacio  saltar\nClic  disparar     Clic derecho  zoom\n'
+             'R  recargar     G  granada\n1 a 4 o rueda  cambiar de arma\nEsc  pausa\n'
+             'Battle Royale:  Z pared   X piso   C rampa   Q salir')
 
 p_principal = Entity(parent=menu)
 p_armas = Entity(parent=menu)
 p_config = Entity(parent=menu)
 paneles = {'principal': p_principal, 'armas': p_armas, 'config': p_config}
 
-panel(menu, (-.58, 0), (.66, 1.1), a=.82, z=.5)                     # paneles laterales
-panel(menu, (.58, 0), (.66, 1.1), a=.82, z=.5)
-panel(menu, (-.25, 0), (.004, 1.1), ORO, 1, .45)                    # filos dorados
-panel(menu, (.25, 0), (.004, 1.1), ORO, 1, .45)
+panel(menu, (-.58, -.035), (.66, .93), a=.82, z=.5)                 # paneles laterales
+panel(menu, (.58, -.035), (.66, .93), a=.82, z=.5)
+panel(menu, (-.25, -.035), (.004, .93), ORO, 1, .45)                # filos dorados
+panel(menu, (.25, -.035), (.004, .93), ORO, 1, .45)
+panel(menu, (0, .46), (1.9, .085), a=.8, z=.45)                     # barra de pestañas
+for _n, _t in (('principal', 'JUGAR'), ('armas', 'ARMERÍA'), ('config', 'AJUSTES')):
+    boton(menu, _t, (TAB_X[_n], .46), lambda n=_n: mostrar_panel(n), .26, .06, '#14110d', '#4a3a22')
+subray = panel(menu, (-.3, .425), (.26, .006), ORO, 1, .1)
 
-# principal
-m_titulo = texto(p_principal, '', (-.86, .47), 3, ORO, (-.5, .5))
-m_sub = texto(p_principal, '', (-.86, .29), 1.1, CREMA, (-.5, .5))
-b_jugar = boton(p_principal, '', (-.58, .08), accion_jugar)
-boton(p_principal, 'ARMERÍA Y MEJORAS', (-.58, -.02), lambda: mostrar_panel('armas'))
-boton(p_principal, 'CONFIGURACIÓN', (-.58, -.12), lambda: mostrar_panel('config'))
-b_salir = boton(p_principal, '', (-.58, -.22), accion_salir)
-m_info = texto(p_principal, '', (.3, .44), 1.25, CREMA, (-.5, .5))
-texto(p_principal, 'W A S D  mover\nShift  correr     Espacio  saltar\nClic  disparar     Clic derecho  zoom\n'
-                   'R  recargar     G  granada\n1 a 4 o rueda  cambiar de arma\nEsc  pausa',
-      (.3, -.2), .85, GRIS, (-.5, .5))
+# pestaña JUGAR
+m_titulo = texto(p_principal, '', (-.86, .39), 3, ORO, (-.5, .5))
+m_sub = texto(p_principal, '', (-.86, .19), 1.1, CREMA, (-.5, .5))
+b_modo = boton(p_principal, '', (-.58, .01), lambda: cambiar_modo(), .5, .07, '#2a2036', '#4a3a66')
+b_jugar = boton(p_principal, '', (-.58, -.1), accion_jugar, .5, .1, '#e8d82a', '#fff25a', '#14110d')
+b_salir = boton(p_principal, '', (-.58, -.22), accion_salir, .5, .07)
+m_info = texto(p_principal, '', (.3, .39), 1.25, CREMA, (-.5, .5))
+texto(p_principal, CONTROLES, (.3, -.2), .85, GRIS, (-.5, .5))
 
-# armería
-texto(p_armas, 'ARMERÍA', (-.86, .47), 3, ORO, (-.5, .5))
-b_armas = [boton(p_armas, w['n'], (-.58, .2 - k * .1), lambda k=k: elegir_arma(k)) for k, w in enumerate(ARMAS)]
-boton(p_armas, 'VOLVER', (-.58, -.3), lambda: mostrar_panel('principal'))
-m_arma_t = texto(p_armas, '', (.3, .46), 2, ORO, (-.5, .5))
-m_arma_d = texto(p_armas, '', (.3, .385), 1.0, GRIS, (-.5, .5))
+# pestaña ARMERÍA: una tarjeta por arma, con su nombre y su "foto" abajo
+marcos, b_armas = [], []
+for _k, _w in enumerate(ARMAS):
+    _yc = .3 - _k * .2
+    marcos.append(panel(p_armas, (-.58, _yc), (.6, .2), ORO, 1, .3))
+    b_armas.append(boton(p_armas, '', (-.58, _yc), lambda k=_k: elegir_arma(k), .56, .18, '#4a3f33', '#6b5840'))
+    _nombre = texto(p_armas, _w['n'].upper(), (-.58, _yc + .065), 1.1, CREMA)
+    _nombre.z = -.05
+    icono_arma(p_armas, _k, (-.58, _yc - .025))
+m_arma_t = texto(p_armas, '', (.3, .39), 2, ORO, (-.5, .5))
+m_arma_d = texto(p_armas, '', (.3, .315), 1.0, GRIS, (-.5, .5))
 filas_mej = []
 for _k in range(len(MEJORAS)):
-    _y = .24 - _k * .1
+    _y = .2 - _k * .1
     filas_mej.append((texto(p_armas, '', (.3, _y), 1.05, CREMA, (-.5, 0)),
                       boton(p_armas, '', (.76, _y), lambda k=_k: comprar(k), .26, .065)))
 m_puntos = texto(p_armas, '', (.3, -.2), 1.4, ORO, (-.5, 0))
@@ -788,28 +873,28 @@ m_aviso = texto(p_armas, '', (.3, -.27), 1.0, '#e8472d', (-.5, 0))
 texto(p_armas, 'Ganás puntos eliminando enemigos\ny superando oleadas. Las mejoras\nse guardan para la próxima vez.',
       (.3, -.34), .8, GRIS, (-.5, .5))
 
-# configuración
-texto(p_config, 'AJUSTES', (-.86, .47), 3, ORO, (-.5, .5))
-boton(p_config, 'VOLVER', (-.58, -.3), lambda: mostrar_panel('principal'))
+# pestaña AJUSTES
+texto(p_config, 'AJUSTES', (-.86, .39), 3, ORO, (-.5, .5))
 
 
 def fila(y, nombre, menos, mas):
-    texto(p_config, nombre, (.3, y), 1.1, CREMA, (-.5, 0))
-    boton(p_config, '-', (.63, y), menos, .07, .07)
-    valor = texto(p_config, '', (.72, y), 1.2)
-    boton(p_config, '+', (.81, y), mas, .07, .07)
+    texto(p_config, nombre, (-.86, y), 1.0, CREMA, (-.5, 0))
+    boton(p_config, '-', (-.5, y), menos, .06, .06)
+    valor = texto(p_config, '', (-.4, y), 1.1)
+    boton(p_config, '+', (-.3, y), mas, .06, .06)
     return valor
 
 
-texto(p_config, 'CONFIGURACIÓN', (.3, .46), 2, ORO, (-.5, .5))
-v_sens = fila(.28, 'Sensibilidad', lambda: cambiar('sens', -5), lambda: cambiar('sens', 5))
-v_fov = fila(.17, 'Campo de visión', lambda: cambiar('fov', -5), lambda: cambiar('fov', 5))
-v_dif = fila(.06, 'Dificultad', lambda: cambiar('dif', -1), lambda: cambiar('dif', 1))
-texto(p_config, 'La dificultad cambia cuánto daño\nte hacen los enemigos.', (.3, -.03), .85, GRIS, (-.5, .5))
-boton(p_config, 'BORRAR RÉCORD', (.58, -.2), borrar_record, .5, .07)
+v_sens = fila(.17, 'Sensibilidad', lambda: cambiar('sens', -5), lambda: cambiar('sens', 5))
+v_fov = fila(.07, 'Campo de visión', lambda: cambiar('fov', -5), lambda: cambiar('fov', 5))
+v_dif = fila(-.03, 'Dificultad', lambda: cambiar('dif', -1), lambda: cambiar('dif', 1))
+texto(p_config, 'La dificultad cambia cuánto daño\nte hacen los enemigos.', (-.86, -.11), .85, GRIS, (-.5, .5))
+boton(p_config, 'BORRAR RÉCORD', (-.58, -.3), borrar_record, .5, .07)
+texto(p_config, 'CONTROLES', (.3, .39), 2, ORO, (-.5, .5))
+texto(p_config, CONTROLES, (.3, .3), 1.0, CREMA, (-.5, .5))
 
 
-# --- vitrina: un rincón lejano del mapa donde el soldado posa en el centro del menú
+# --- vitrina: un rincón lejano del mapa, tipo lobby, donde el soldado posa en el centro del menú
 VITRINA_Z = 300
 soldado_menu = None
 
@@ -817,10 +902,17 @@ soldado_menu = None
 def construir_vitrina():
     global soldado_menu
     v = Entity(position=(0, 0, VITRINA_Z))
-    pieza(v, (0, -.15, 3.2), (5, .3, 5), '#1a1714')
-    pieza(v, (0, .01, 3.2), (4.2, .02, 4.2), ORO, **UI)
-    pieza(v, (0, .02, 3.2), (4.0, .02, 4.0), '#14110f')
-    pieza(v, (0, 6, 11), (46, 26, .5), '#14100c', **UI)
+    pieza(v, (0, -.5, 30), (200, 1, 200), '#3b2f45', texture=T_RUIDO)           # piso de la plaza
+    pieza(v, (0, -.15, 3.2), (5, .3, 5), '#1a1a24')                             # plataforma
+    pieza(v, (0, .01, 3.2), (4.3, .02, 4.3), '#4fe3ff', **UI)                   # borde brillante
+    pieza(v, (0, .02, 3.2), (4.0, .02, 4.0), '#161a24')
+    for x in (-8, 8):                                                           # plataformas vacías a los costados
+        pieza(v, (x, -.1, 5.5), (3, .2, 3), '#2a2c38')
+        pieza(v, (x, .01, 5.5), (2.6, .02, 2.6), '#8a7aa0', **UI)
+    for x, col in ((-15, '#ff4fd8'), (-10, '#4fe3ff'), (11, '#ff4fd8'), (16, '#4fe3ff'), (-22, '#4fe3ff'), (22, '#ff4fd8')):
+        h = random.uniform(10, 20)                                              # torres con neón
+        pieza(v, (x, h / 2, 26), (4, h, 4), '#241d2e')
+        pieza(v, (x, h / 2, 23.9), (.5, h * .9, .1), col, **UI)
     soldado_menu = construir_soldado(v, 'negro', S.arma_inicial)
     soldado_menu.position = (0, .04, 3.2)
     soldado_menu.rotation_y = 160
@@ -847,6 +939,7 @@ def abrir_menu(titulo, sub, jugar, salir):
     b_jugar.text = jugar
     b_salir.text = salir
     poner(m_aviso, '')
+    b_modo.enabled = (S.modo != 'pausa')      # el modo no se cambia en plena partida
     vitrina_arma(S.arma_inicial)
     refrescar_menu()
     mostrar_panel('principal')
@@ -916,20 +1009,43 @@ class Enemigo(Entity):
         super().__init__(position=pos + Vec3(0, .1, 0))
         self.hp, self.vel, self.pref = 100.0, velocidad, preferida
         self.vivo = True
-        self.cool = 1.5
+        self.cool = random.uniform(1.0, 2.0)
         self.lado = random.choice((-1, 1))
         self.t_lado = 2.0
         self.t_vista = 0.0
-        self.ve = False
+        self.t_obst = 0.0
+        self.bloq = False
+        self.obj = None          # a quién ve y le dispara
+        self.meta = None         # hacia quién camina
         self.paso = random.uniform(0, 6)
-        self.modelo = construir_soldado(self, random.choice(('negro', 'negro', 'verde', 'arena')),
-                                        random.choice((0, 0, 0, 2, 3)))
+        self.arma_i = random.choice((0, 0, 0, 2, 3))
+        self.modelo = construir_soldado(self, random.choice(('negro', 'negro', 'verde', 'arena')), self.arma_i)
         # cajas invisibles donde pegan las balas: cuerpo y cabeza
         self.cuerpo = Entity(parent=self, model='cube', position=(0, 1.0, 0), scale=(.62, 1.2, .42), collider='box', visible=False)
         self.cabeza = Entity(parent=self, model='cube', position=(0, 1.78, 0), scale=(.36, .4, .4), collider='box', visible=False)
         for parte in (self.cuerpo, self.cabeza):
             parte.enemigo = self        # así la bala sabe a quién le pegó
         S.enemigos.append(self)
+
+    def elegir_objetivo(self):
+        """En oleadas persigue al jugador. En Battle Royale elige al más cercano que vea (jugador u otro soldado)."""
+        ojos = self.position + Vec3(0, 1.4, 0)
+        cand = [jugador] + ([e for e in S.enemigos if e is not self] if S.br else [])
+        cand.sort(key=lambda c: (c.position - self.position).length())
+        self.obj = None
+        for c in cand[:3]:
+            if (c.position - self.position).length() > 60:
+                break
+            v = c.position + Vec3(0, 1.4, 0) - ojos
+            if not raycast(ojos, v.normalized(), distance=v.length(), traverse_target=mundo).hit:
+                self.obj = c
+                break
+        if self.obj is not None:
+            self.meta = self.obj
+        elif not S.br or (cand[0].position - self.position).length() < 45:
+            self.meta = cand[0]
+        else:
+            self.meta = None
 
     def update(self):
         if S.modo != 'juego' or not self.vivo:
@@ -938,24 +1054,35 @@ class Enemigo(Entity):
         self.cool -= dt
         self.t_lado -= dt
         self.t_vista -= dt
-        dx, dz = jugador.x - self.x, jugador.z - self.z
+        self.t_obst -= dt
+        if S.br and fuera_de_zona(self.position):
+            self.herir(S.z_dps * dt)                       # la tormenta también los lastima
+            if not self.vivo:
+                return
+        if self.t_vista <= 0:
+            self.t_vista = .3
+            self.elegir_objetivo()
+        huye = S.br and fuera_de_zona(self.position, -4)   # corre hacia el centro de la zona segura
+        if huye or self.meta is None:
+            destino = Vec3(S.z_cx, 0, S.z_cz) if S.br else jugador.position
+        else:
+            destino = self.meta.position
+        dx, dz = destino.x - self.x, destino.z - self.z
         d = math.hypot(dx, dz) or .001
         hacia = Vec3(dx / d, 0, dz / d)
         lateral = Vec3(hacia.z * self.lado, 0, -hacia.x * self.lado)
-
         if self.t_lado <= 0:
             self.lado = -self.lado
             self.t_lado = random.uniform(1.5, 3.5)
-        if self.t_vista <= 0:
-            self.t_vista = .3
-            ojos = self.position + Vec3(0, 1.4, 0)
-            mira_a = jugador.position + Vec3(0, 1.5, 0) - ojos
-            self.ve = not raycast(ojos, mira_a.normalized(), distance=mira_a.length(), traverse_target=mundo).hit
 
-        mv = lateral * .6 if (d < self.pref and self.ve) else hacia
-        if raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit:
+        combate = self.obj is not None and not huye
+        mv = lateral * .6 if (combate and d < self.pref) else hacia
+        if self.t_obst <= 0:
+            self.t_obst = .12
+            self.bloq = raycast(self.position + Vec3(0, 1, 0), mv.normalized(), distance=1.5, traverse_target=mundo).hit
+        if self.bloq:
             mv = lateral
-        camina = d > 1.5
+        camina = d > (1.5 if (self.meta is not None and not huye) else 4)
         if camina:
             self.position += mv * self.vel * dt
         self.x = max(-58, min(58, self.x))
@@ -966,45 +1093,60 @@ class Enemigo(Entity):
         self.modelo.piernas[0].rotation_x = giro
         self.modelo.piernas[1].rotation_x = -giro
 
-        if self.ve and d < 60 and self.cool <= 0:
-            self.disparar(d)
+        if combate and d < 60 and self.cool <= 0:
+            self.disparar(self.obj, d)
 
-    def disparar(self, d):
+    def disparar(self, objetivo, d):
         self.cool = max(.4, random.uniform(.9, 1.7) - min(.5, S.ola * .04))
         r = math.radians(self.rotation_y)
         origen = self.position + Vec3(math.sin(r) * .95, 1.2, math.cos(r) * .95)
         punteria = max(.08, min(.55, .5 - d / 70 + S.ola * .012))
-        blanco = jugador.position + Vec3(0, 1.5, 0)
+        blanco = objetivo.position + Vec3(0, 1.5 if objetivo is jugador else 1.3, 0)
         acierta = random.random() < punteria
         if not acierta:
             blanco += Vec3(random.uniform(-2, 2), random.uniform(-1, 1), random.uniform(-2, 2))
         destello(origen)
         trazador(origen, blanco, '#ff6a3a')
         if acierta:
-            dano_jugador(random.uniform(5, 9) * (1 + S.ola * .03) * DIFICULTADES[S.dif][1])
+            if objetivo is jugador:
+                dano_jugador(random.uniform(5, 9) * (1 + S.ola * .03) * DIFICULTADES[S.dif][1])
+            else:
+                objetivo.golpe(random.uniform(8, 16), False, blanco, False)
 
-    def golpe(self, dano, cabeza, punto):
+    def golpe(self, dano, cabeza, punto, jug=True):
         if not self.vivo:
             return
         self.hp -= dano
         chispas(punto, '#8a0f0f', 8, 3, .06, .5)
-        S.marcador = 1.0
+        if jug:
+            S.marcador = 1.0
         if self.hp <= 0:
-            self.morir(cabeza)
+            self.morir(cabeza, jug)
 
-    def morir(self, cabeza):
+    def herir(self, n):
+        self.hp -= n
+        if self.hp <= 0:
+            self.morir(False, False)
+
+    def morir(self, cabeza, jug=True):
         self.vivo = False
         S.enemigos.remove(self)
         self.cuerpo.collider = None
         self.cabeza.collider = None
         self.animate('rotation_x', -90, duration=.4)
         destroy(self, delay=8)
-        S.bajas += 1
         S.restantes -= 1
-        S.puntos += 20 if cabeza else 10
-        if cabeza:
-            mensaje('Disparo a la cabeza  +20')
-        if random.random() < .22:
+        if jug:
+            S.bajas += 1
+            S.puntos += 20 if cabeza else 10
+            if S.br:
+                S.materiales += 30
+                mensaje(f'Bajaste a un soldado  ·  quedan {len(S.enemigos) + 1}')
+            elif cabeza:
+                mensaje('Disparo a la cabeza  +20')
+        if S.br:
+            soltar_botin(self.position, self.arma_i)
+        elif random.random() < .22:
             Recogible(self.position)
 
 
@@ -1034,6 +1176,7 @@ class Granada(Entity):
 
 
 class Recogible(Entity):
+    """Botín del modo oleadas: botiquín o munición."""
     def __init__(self, pos):
         super().__init__(position=pos + Vec3(0, .45, 0))
         self.salud = random.random() < .5
@@ -1061,6 +1204,215 @@ class Recogible(Entity):
             destroy(self)
 
 
+# ------------------------------------------------------------------ Battle Royale: botín
+class Botin(Entity):
+    """Objeto en el suelo con una columna de luz: armas, munición, botiquines, materiales y granadas."""
+    def __init__(self, pos, tipo, i=0):
+        super().__init__(position=pos + Vec3(0, .55, 0))
+        self.tipo, self.i = tipo, i
+        if tipo == 'arma':
+            armar_arma(self, i).scale = 1.4
+        elif tipo == 'municion':
+            pieza(self, (0, 0, 0), (.5, .3, .35), '#4d5a2e')
+            pieza(self, (0, 0, .18), (.4, .06, .02), ORO)
+        elif tipo == 'salud':
+            pieza(self, (0, 0, 0), (.5, .38, .38), '#eeeeee')
+            pieza(self, (0, 0, .195), (.28, .07, .02), '#c4202a')
+            pieza(self, (0, 0, .195), (.07, .28, .02), '#c4202a')
+        elif tipo == 'materiales':
+            pieza(self, (0, 0, 0), (.55, .4, .45), '#b98b50')
+            pieza(self, (0, .05, .23), (.5, .06, .02), '#7a5a30')
+        else:
+            pieza(self, (0, 0, 0), (.3, .3, .3), '#2a3322')
+        haz = Entity(parent=self, model='cube', position=(0, 1.2, 0), scale=(.1, 2.4, .1), color=C(BEAM[tipo]), **UI)
+        haz.alpha = .45
+        S.recogibles.append(self)
+
+    def update(self):
+        if S.modo != 'juego':
+            return
+        self.rotation_y += 90 * time.dt
+        if (jugador.position - self.position).length() < 2.0:
+            self.recoger()
+
+    def recoger(self):
+        t = self.tipo
+        if t == 'arma':
+            S.tiene[self.i] = True
+            S.reserva[self.i] += ARMAS[self.i]['reserva'] // 2
+            if S.municion[self.i] == 0:
+                S.municion[self.i] = ef(self.i)['cargador']
+            cambiar_arma(self.i)
+            mensaje(f'Recogiste: {ARMAS[self.i]["n"]}')
+        elif t == 'municion':
+            for k in range(len(ARMAS)):
+                if S.tiene[k]:
+                    S.reserva[k] += ef(k)['cargador'] * 2
+            mensaje('Munición')
+        elif t == 'salud':
+            curar(35)
+            mensaje('Botiquín +35')
+        elif t == 'materiales':
+            S.materiales += 100
+            mensaje('Materiales +100')
+        else:
+            S.granadas = min(6, S.granadas + 2)
+            mensaje('Granadas +2')
+        S.recogibles.remove(self)
+        destroy(self)
+
+
+def soltar_botin(p, arma_i):
+    def cerca():
+        return p + Vec3(random.uniform(-.7, .7), 0, random.uniform(-.7, .7))
+    Botin(cerca(), 'materiales')
+    if random.random() < .6:
+        Botin(cerca(), 'municion')
+    if random.random() < .4:
+        Botin(cerca(), 'salud')
+    if random.random() < .5:
+        Botin(cerca(), 'arma', arma_i)
+
+
+def punto_libre():
+    for _ in range(60):
+        p = Vec3(random.uniform(-50, 50), 0, random.uniform(-50, 50))
+        if libre(p, 6, 2.5):
+            return p
+    return Vec3(random.uniform(-50, 50), 0, random.uniform(-50, 50))
+
+
+def repartir_botin():
+    """Las armas están dentro de los edificios; lo demás, repartido por el mapa."""
+    sitios = [Vec3(r.x + random.uniform(-2, 2), 0, r.z + random.uniform(-2, 2)) for r in ruinas]
+    random.shuffle(sitios)
+    for k, i in enumerate((0, 0, 0, 2, 2, 2, 3, 3)):
+        Botin(sitios[k] if k < len(sitios) else punto_libre(), 'arma', i)
+    for tipo, n in (('municion', 5), ('salud', 5), ('materiales', 6), ('granada', 2)):
+        for _ in range(n):
+            Botin(punto_libre(), tipo)
+
+
+# ------------------------------------------------------------------ Battle Royale: zona que se cierra
+def fuera_de_zona(p, margen=0):
+    return math.hypot(p.x - S.z_cx, p.z - S.z_cz) > S.z_r + margen
+
+
+def iniciar_fase():
+    """Elige la próxima zona (siempre dentro de la actual) y arranca la cuenta atrás."""
+    if S.z_fase >= len(FASES):
+        S.z_estado = 'final'
+        return
+    rf, espera, dur, dps = FASES[S.z_fase]
+    S.z_estado, S.z_t, S.z_dur, S.z_dps = 'espera', float(espera), float(dur), dps
+    S.z_r0, S.z_x0, S.z_z0 = S.z_r, S.z_cx, S.z_cz
+    ang, mov = random.uniform(0, math.tau), max(0, S.z_r0 - rf) * random.uniform(.2, .8)
+    S.z_r1, S.z_x1, S.z_z1 = rf, S.z_x0 + math.cos(ang) * mov, S.z_z0 + math.sin(ang) * mov
+    mensaje(f'La zona se cierra en {espera} s')
+
+
+def actualizar_zona(dt):
+    if S.z_estado == 'final':
+        return
+    S.z_t -= dt
+    if S.z_estado == 'espera':
+        if S.z_t <= 0:
+            S.z_estado, S.z_t = 'encoge', S.z_dur
+            mensaje('¡La zona se está cerrando!')
+    else:
+        f = 1 - max(0, S.z_t) / S.z_dur
+        S.z_r = lerp(S.z_r0, S.z_r1, f)
+        S.z_cx = lerp(S.z_x0, S.z_x1, f)
+        S.z_cz = lerp(S.z_z0, S.z_z1, f)
+        if S.z_t <= 0:
+            S.z_fase += 1
+            iniciar_fase()
+
+
+def actualizar_muro_zona():
+    clave = (round(S.z_r, 1), round(S.z_cx, 1), round(S.z_cz, 1))
+    if clave == S.zona_clave:
+        return
+    S.zona_clave = clave
+    n = len(muro_zona)
+    ancho = math.tau * S.z_r / n * 1.08
+    for k, e in enumerate(muro_zona):
+        th = k / n * math.tau
+        e.enabled = S.z_r < 80
+        e.position = (S.z_cx + math.cos(th) * S.z_r, 20, S.z_cz + math.sin(th) * S.z_r)
+        e.scale = (ancho, 40, .8)
+        e.rotation_y = math.degrees(math.atan2(-math.cos(th), -math.sin(th)))
+
+
+def actualizar_minimapa():
+    k = MAPA / 130
+    n = len(mapa_pts)
+    for j, pt in enumerate(mapa_pts):
+        th = j / n * math.tau
+        x, z = S.z_cx + math.cos(th) * S.z_r, S.z_cz + math.sin(th) * S.z_r
+        pt.enabled = abs(x) < 64 and abs(z) < 64
+        pt.position = (MAPA_X + x * k, MAPA_Y + z * k, -.1)
+    mapa_yo.position = (MAPA_X + jugador.x * k, MAPA_Y + jugador.z * k, -.2)
+
+
+# ------------------------------------------------------------------ Battle Royale: construcción
+class Pieza(Entity):
+    """Pared, piso o rampa que construís. Se rompe a balazos."""
+    def __init__(self, info):
+        super().__init__(parent=mundo, model='cube', position=info['pos'], scale=info['esc'],
+                         rotation=(info['rot'][0], info['rot'][1], 0), color=C('#c9a064'),
+                         collider='box', texture=T_RUIDO)
+        self.es_pieza = True
+        self.hp = 160 if info['tipo'] == 'pared' else 220
+        self.clave = info['clave']
+        S.piezas[self.clave] = self
+
+    def golpe(self, dano):
+        self.hp -= dano
+        chispas(self.world_position, '#c9a064', 4, 3, .08, .3)
+        if self.hp <= 0:
+            S.piezas.pop(self.clave, None)
+            destroy(self)
+
+
+def calcular_pieza(tipo):
+    """Dónde iría la pieza si construís ahora: siempre en tu casilla o en la de adelante, pegada a la grilla."""
+    lv = max(0, int(round((jugador.y - .1) / ALTO)))                    # piso en el que estás parado
+    h = int(round(jugador.rotation_y / 90)) % 4                        # hacia dónde mirás (0 = +z)
+    dx, dz = HD[h]
+    mx = (math.floor(jugador.x / LADO) + .5) * LADO                    # centro de tu casilla
+    mz = (math.floor(jugador.z / LADO) + .5) * LADO
+    rot = (0, 0)
+    if tipo == 'pared':
+        pos = (mx + dx * LADO / 2, lv * ALTO + ALTO / 2, mz + dz * LADO / 2)
+        esc = (LADO, ALTO, .3) if dz else (.3, ALTO, LADO)
+    elif tipo == 'piso':
+        arriba = jugador.camera_pivot.rotation_x < -25                 # mirando para arriba: techo
+        pos = (mx + dx * LADO, (lv + (1 if arriba else 0)) * ALTO + .1, mz + dz * LADO)
+        esc = (LADO, .2, LADO)
+    else:
+        pos = (mx + dx * LADO, lv * ALTO + ALTO / 2 + .1, mz + dz * LADO)
+        esc = (LADO, .25, math.hypot(LADO, ALTO))
+        rot = (-math.degrees(math.atan2(ALTO, LADO)), h * 90)
+    clave = (tipo, round(pos[0], 1), round(pos[1], 1), round(pos[2], 1), h if tipo == 'rampa' else 0)
+    return dict(tipo=tipo, pos=pos, esc=esc, rot=rot, clave=clave)
+
+
+def construir():
+    if not S.construyendo or S.t_construir > 0:
+        return
+    info = calcular_pieza(S.construyendo)
+    if S.materiales < COSTO_PIEZA:
+        mensaje('Te faltan materiales')
+        S.t_construir = .5
+        return
+    if info['clave'] in S.piezas:
+        return
+    S.materiales -= COSTO_PIEZA
+    S.t_construir = .1
+    Pieza(info)
+
+
 # ------------------------------------------------------------------ reglas del juego
 def curar(n):
     S.hp = min(100, S.hp + n)
@@ -1076,11 +1428,29 @@ def dano_jugador(n):
     S.sangre = 1.0
     if S.hp <= 0 and S.modo == 'juego':
         S.modo = 'fin'
+        if S.br:
+            puesto = len(S.enemigos) + 1
+            premio = S.bajas * 15 + max(0, N_BOTS + 1 - puesto) * 8
+            S.puntos += premio
+            if S.mejor_puesto == 0 or puesto < S.mejor_puesto:
+                S.mejor_puesto = puesto
+            abrir_menu('ELIMINADO', f'Puesto #{puesto} de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} pts',
+                       'JUGAR DE NUEVO', 'SALIR AL MENÚ')
+            return
         sub = f'Llegaste a la oleada {S.ola}\ncon {S.bajas} bajas.'
         if (S.ola, S.bajas) > (S.record_ola, S.record_bajas):
             S.record_ola, S.record_bajas = S.ola, S.bajas
             sub += '\n¡Nuevo récord!'
         abrir_menu('CAÍSTE EN\nCOMBATE', sub, 'JUGAR DE NUEVO', 'SALIR AL MENÚ')
+
+
+def victoria():
+    S.modo = 'fin'
+    premio = S.bajas * 15 + 100 + N_BOTS * 8
+    S.puntos += premio
+    S.mejor_puesto = 1
+    abrir_menu('¡VICTORIA\nMAGISTRAL!', f'Puesto #1 de {N_BOTS + 1}\n{S.bajas} bajas  ·  +{premio} pts',
+               'JUGAR DE NUEVO', 'SALIR AL MENÚ')
 
 
 def siguiente_ola():
@@ -1103,6 +1473,29 @@ def aparecer():
     Enemigo(random.choice(lejos), min(4.2, 2.2 + S.ola * .15) * random.uniform(.9, 1.1), random.uniform(12, 22))
 
 
+def iniciar_br():
+    """Battle Royale: arrancás solo con la pistola, tenés que buscar armas, y la zona se cierra."""
+    S.tiene = [False, True, False, False]
+    S.municion = [0, ef(1)['cargador'], 0, 0]
+    S.reserva = [0, ARMAS[1]['reserva'] // 2, 0, 0]
+    S.materiales, S.granadas = 200, 1
+    p = punto_libre()
+    jugador.position = (p.x, .1, p.z)
+    jugador.rotation_y = random.choice((0, 90, 180, 270))
+    cambiar_arma(1)
+    S.z_fase, S.z_r, S.z_cx, S.z_cz, S.zona_clave = 0, 85.0, 0.0, 0.0, None
+    iniciar_fase()
+    repartir_botin()
+    for _ in range(N_BOTS):
+        for _i in range(40):
+            q = punto_libre()
+            if (q - jugador.position).length() > 22:
+                break
+        Enemigo(q, random.uniform(2.6, 3.6), random.uniform(12, 20))
+    S.restantes = N_BOTS
+    mensaje(f'Battle Royale: quedan {N_BOTS + 1}')
+
+
 def nueva_partida():
     limpiar()
     S.guardada = None
@@ -1110,11 +1503,17 @@ def nueva_partida():
     S.t_aparicion = S.t_ola = 0.0
     S.municion = [ef(i)['cargador'] for i in range(len(ARMAS))]
     S.reserva = [a['reserva'] for a in ARMAS]
+    S.tiene = [True] * len(ARMAS)
+    S.materiales = 0
+    S.construyendo = None
     jugador.position = (0, .1, 0)
     jugador.rotation_y = 0
     jugador.camera_pivot.rotation_x = 0
-    cambiar_arma(S.arma_inicial)
-    siguiente_ola()
+    if S.br:
+        iniciar_br()
+    else:
+        cambiar_arma(S.arma_inicial)
+        siguiente_ola()
     entrar_al_juego()
 
 
@@ -1152,6 +1551,8 @@ def disparar():
             if enemigo:
                 cabeza = tiro.entity is enemigo.cabeza
                 enemigo.golpe(min(100, a['dano'] * 3) if cabeza else a['dano'], cabeza, fin)
+            elif getattr(tiro.entity, 'es_pieza', False):
+                tiro.entity.golpe(a['dano'])
             else:
                 chispas(fin, '#ffc060', 5, 5, .04, .35)
         trazador(boca, fin, '#ffd28a')
@@ -1176,27 +1577,43 @@ def lanzar_granada():
     Granada()
 
 
+def elegir_arma_slot(i):
+    if S.tiene[i]:
+        cambiar_arma(i)
+    else:
+        mensaje(f'Todavía no tenés: {ARMAS[i]["n"]}')
+
+
 def pausar():
     S.modo = 'pausa'
     S.arma_inicial = S.arma
+    S.construyendo = None
     abrir_menu('PAUSA', 'Tu partida te espera.', 'CONTINUAR', 'SALIR AL MENÚ')
 
 
 # ------------------------------------------------------------------ bucle principal
 def input(key):
     if S.modo == 'juego':
-        if key == 'left mouse down' and not ARMAS[S.arma]['auto']:
+        if key == 'left mouse down' and not ARMAS[S.arma]['auto'] and not S.construyendo:
             disparar()
         elif key == 'r':
             recargar()
         elif key == 'g':
             lanzar_granada()
         elif key in ('1', '2', '3', '4'):
-            cambiar_arma(int(key) - 1)
-        elif key == 'scroll up':
-            cambiar_arma((S.arma - 1) % len(ARMAS))
-        elif key == 'scroll down':
-            cambiar_arma((S.arma + 1) % len(ARMAS))
+            elegir_arma_slot(int(key) - 1)
+        elif key in ('scroll up', 'scroll down'):
+            paso = -1 if key == 'scroll up' else 1
+            for k in range(1, len(ARMAS)):
+                i = (S.arma + paso * k) % len(ARMAS)
+                if S.tiene[i]:
+                    cambiar_arma(i)
+                    break
+        elif key in ('z', 'x', 'c') and S.br:
+            tipo = {'z': 'pared', 'x': 'piso', 'c': 'rampa'}[key]
+            S.construyendo = None if S.construyendo == tipo else tipo
+        elif key == 'q':
+            S.construyendo = None
         elif key in ('escape', 'p'):
             pausar()
     elif key == 'enter':
@@ -1215,12 +1632,16 @@ def update():
         return
     a = ef(S.arma)
 
-    # movimiento y arma
+    # movimiento, arma y construcción
     corre = held_keys['left shift'] or held_keys['shift']
     jugador.speed = (8.5 if corre else 5.5) * (.85 if S.recargando else 1)
     S.enfriamiento -= dt
     S.t_granada -= dt
-    if held_keys['left mouse'] and a['auto']:
+    S.t_construir -= dt
+    if S.construyendo:
+        if held_keys['left mouse']:
+            construir()
+    elif held_keys['left mouse'] and a['auto']:
         disparar()
     if S.recargando:
         S.t_recarga -= dt
@@ -1229,27 +1650,53 @@ def update():
             n = min(a['cargador'] - S.municion[S.arma], S.reserva[S.arma])
             S.municion[S.arma] += n
             S.reserva[S.arma] -= n
-    zoom = held_keys['right mouse']
+    zoom = held_keys['right mouse'] and not S.construyendo
     camera.fov = lerp(camera.fov, a['zoom'] if zoom else S.fov, min(1, dt * 12))
     jugador.mouse_sensitivity = Vec2(S.sens, S.sens) * (camera.fov / S.fov)
     arma.x = lerp(arma.x, 0 if zoom else ARMA_FP[S.arma][0], min(1, dt * 10))
     mirilla = S.arma == 3 and zoom and camera.fov < 45
-    arma.visible = not mirilla
+    arma.visible = not mirilla and not S.construyendo
     scope_g.enabled = mirilla
     mira_g.enabled = not mirilla
+    if S.construyendo:                                          # la pieza "fantasma" que muestra dónde va
+        info = calcular_pieza(S.construyendo)
+        fantasma.enabled = True
+        fantasma.position = info['pos']
+        fantasma.scale = info['esc']
+        fantasma.rotation = (info['rot'][0], info['rot'][1], 0)
+        ok = S.materiales >= COSTO_PIEZA and info['clave'] not in S.piezas
+        if ok != S.fant_ok:
+            S.fant_ok = ok
+            fantasma.color = C('#4fe3ff' if ok else '#ff4f4f')
+            fantasma.alpha = .35
+    else:
+        fantasma.enabled = False
 
-    # oleadas
-    S.t_aparicion -= dt
-    if S.por_aparecer > 0 and len(S.enemigos) < min(8, 3 + S.ola) and S.t_aparicion <= 0:
-        aparecer()
-        S.por_aparecer -= 1
-        S.t_aparicion = random.uniform(.8, 2)
-    if S.restantes <= 0 and S.t_ola <= 0:
-        S.t_ola = 4
-    if S.t_ola > 0:
-        S.t_ola -= dt
-        if S.t_ola <= 0:
-            siguiente_ola()
+    # reglas del modo
+    fuera = False
+    if S.br:
+        actualizar_zona(dt)
+        actualizar_muro_zona()
+        fuera = fuera_de_zona(jugador.position)
+        if fuera:
+            dano_jugador(S.z_dps * dt)
+        if S.modo != 'juego':
+            return
+        if not S.enemigos:
+            victoria()
+            return
+    else:
+        S.t_aparicion -= dt
+        if S.por_aparecer > 0 and len(S.enemigos) < min(8, 3 + S.ola) and S.t_aparicion <= 0:
+            aparecer()
+            S.por_aparecer -= 1
+            S.t_aparicion = random.uniform(.8, 2)
+        if S.restantes <= 0 and S.t_ola <= 0:
+            S.t_ola = 4
+        if S.t_ola > 0:
+            S.t_ola -= dt
+            if S.t_ola <= 0:
+                siguiente_ola()
 
     # mira dinámica y efectos de pantalla
     S.sangre = max(0, S.sangre - dt * .9)
@@ -1261,6 +1708,9 @@ def update():
     mira[1].y = -S.gap - .012
     mira[2].x = S.gap + .012
     mira[3].x = -S.gap - .012
+    if fuera != S.en_tormenta:
+        S.en_tormenta = fuera
+        vineta.color = C('#7a2cff' if fuera else '#c00000')
     vineta.alpha = min(1, S.sangre + (.4 if S.hp < 30 else 0)) * (1 if T_VINETA else .4)
     marca_g.enabled = S.marcador > 0
 
@@ -1275,23 +1725,41 @@ def update():
         S.hp_nivel = nivel
         b_hp.color = C(('#5aa04a', '#d9a441', '#c4452d')[nivel])
     poner(t_hp, str(int(math.ceil(hp))))
-    poner(t_ola, f'OLEADA {S.ola}')
-    poner(t_rest, f'Enemigos restantes: {S.restantes}' if S.restantes > 0 else 'Oleada despejada')
-    b_ola.scale_x = max(.001, .5 * max(0, S.restantes) / max(1, 4 + S.ola * 3))
     poner(t_puntos, f'PUNTOS  {S.puntos}')
     poner(t_bajas, f'BAJAS  {S.bajas}')
+    mapa_g.enabled = bool(S.br)
+    if S.br:
+        vivos = len(S.enemigos) + 1
+        if S.z_estado == 'encoge':
+            zona = 'ZONA CERRÁNDOSE'
+        elif S.z_estado == 'espera':
+            zona = f'Zona en {int(max(0, S.z_t))} s'
+        else:
+            zona = 'ZONA FINAL'
+        poner(t_ola, 'BATTLE ROYALE')
+        poner(t_rest, f'Vivos: {vivos}   ·   {zona}')
+        b_ola.scale_x = max(.001, .5 * vivos / (N_BOTS + 1))
+        poner(t_gran, f'GRANADAS  {S.granadas}    MATERIALES  {S.materiales}')
+        actualizar_minimapa()
+    else:
+        poner(t_ola, f'OLEADA {S.ola}')
+        poner(t_rest, f'Enemigos restantes: {S.restantes}' if S.restantes > 0 else 'Oleada despejada')
+        b_ola.scale_x = max(.001, .5 * max(0, S.restantes) / max(1, 4 + S.ola * 3))
+        poner(t_gran, f'GRANADAS  {S.granadas}')
     poner(t_armanom, ARMAS[S.arma]['n'].upper())
     poner(t_mun, str(S.municion[S.arma]))
     poner(t_res, f'/ {S.reserva[S.arma]}')
-    poner(t_gran, f'GRANADAS  {S.granadas}')
-    if S.recargando:
+    if fuera:
+        poner(t_estado, 'FUERA DE LA ZONA')
+    elif S.recargando:
         poner(t_estado, 'RECARGANDO...')
     elif S.municion[S.arma] == 0 and S.reserva[S.arma] == 0:
         poner(t_estado, 'SIN MUNICIÓN')
     else:
         poner(t_estado, '')
+    poner(t_hint, 'CONSTRUIR:  Z pared   X piso   C rampa   Q salir   clic = colocar' if S.construyendo else '')
     for i, t in enumerate(t_tiles):
-        poner(t, f'{i + 1}  {ARMAS[i]["n"]}\n{S.municion[i]} / {S.reserva[i]}')
+        poner(t, f'{i + 1}  {ARMAS[i]["n"]}\n{S.municion[i]} / {S.reserva[i]}' if S.tiene[i] else f'{i + 1}  ---')
     if S.arma != S.hud_arma:
         S.hud_arma = S.arma
         for i, p in enumerate(tiles):
