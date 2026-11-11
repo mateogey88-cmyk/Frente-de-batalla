@@ -849,29 +849,32 @@ def mensaje(txt):
 
 
 # --- menú: pestañas arriba (JUGAR / ARMERÍA / AJUSTES); el soldado queda en el centro
+def _vacio(txt):
+    return not (txt and txt.strip())
+
+
 def boton(padre, txt, pos, accion, ancho=.5, alto=.08, col='#1d1813', hl='#6a4f2a', txt_col=None):
-    # El texto nunca arranca vacío (si no, Ursina no crea el objeto de texto interno y
-    # falla al asignar text_color). El color del texto se aplica después de crear el botón.
-    b = Button(parent=padre, text=txt or ' ', position=pos, scale=(ancho, alto), color=C(col),
+    # ARREGLO: Ursina falla (IndexError en Text.align) si el botón se crea con texto vacío o solo
+    # espacios. Por eso un botón "sin texto" arranca con un punto, que se vuelve transparente.
+    b = Button(parent=padre, text=('.' if _vacio(txt) else txt), position=pos, scale=(ancho, alto), color=C(col),
                highlight_color=C(hl), pressed_color=C('#8a6a30'), on_click=accion, **UI)
-    b._txt_col = None
-    if txt_col:
-        b._txt_col = C(txt_col)
-        try:
-            b.text_color = b._txt_col
-        except Exception:
-            pass
+    b._txt_col = C(txt_col) if txt_col else None
+    poner_boton(b, txt)
     return b
 
 
 def poner_boton(b, txt):
-    """Cambia el texto de un botón y mantiene el color del texto que tenía."""
-    b.text = txt or ' '
-    if getattr(b, '_txt_col', None) is not None:
-        try:
+    """Cambia el texto de un botón y mantiene el color del texto que tenía.
+    Si el texto está vacío, deja un punto transparente (así nunca se rompe el alineador de texto)."""
+    vacio = _vacio(txt)
+    b.text = '.' if vacio else txt
+    try:
+        if vacio:
+            b.text_color = color.clear
+        elif getattr(b, '_txt_col', None) is not None:
             b.text_color = b._txt_col
-        except Exception:
-            pass
+    except Exception:
+        pass
 
 
 def icono_arma(padre, i, pos, ancho_max=.42, alto_max=.1):
@@ -1053,7 +1056,7 @@ marcos, b_armas = [], []
 for _k, _w in enumerate(ARMAS):
     _yc = .3 - _k * .2
     marcos.append(panel(p_armas, (-.58, _yc), (.6, .2), ORO, 1, .3))
-    b_armas.append(boton(p_armas, ' ', (-.58, _yc), lambda k=_k: elegir_arma(k), .56, .18, '#4a3f33', '#6b5840'))
+    b_armas.append(boton(p_armas, '', (-.58, _yc), lambda k=_k: elegir_arma(k), .56, .18, '#4a3f33', '#6b5840'))
     _nombre = texto(p_armas, _w['n'].upper(), (-.58, _yc + .065), 1.1, CREMA)
     _nombre.z = -.05
     icono_arma(p_armas, _k, (-.58, _yc - .025))
@@ -1063,7 +1066,7 @@ filas_mej = []
 for _k in range(len(MEJORAS)):
     _y = .2 - _k * .1
     filas_mej.append((texto(p_armas, '', (.3, _y), .9, CREMA, (-.5, 0)),
-                      boton(p_armas, ' ', (.74, _y), lambda k=_k: comprar(k), .34, .065)))
+                      boton(p_armas, '', (.74, _y), lambda k=_k: comprar(k), .34, .065)))
 m_puntos = texto(p_armas, '', (.3, -.2), 1.4, ORO, (-.5, 0))
 m_aviso = texto(p_armas, '', (.3, -.27), 1.0, '#e8472d', (-.5, 0))
 texto(p_armas, 'Ganás chapas eliminando enemigos\ny superando oleadas. Las mejoras\nse guardan para la próxima vez.',
@@ -1124,7 +1127,7 @@ def crear_tarjeta(padre, pos, ancho, alto, accion, esc):
     t = dict(sid=-1, padre=g, grupo=g, pos=pos, alto=alto, icono=None)
     t['sel'] = panel(g, (x, y), (ancho + .014, alto + .014), CREMA, 1, .36)
     t['marco'] = panel(g, (x, y), (ancho, alto), '#808080', 1, .3)
-    t['btn'] = boton(g, ' ', (x, y), accion, ancho - .012, alto - .012, '#1d1813', '#3a3025')
+    t['btn'] = boton(g, '', (x, y), accion, ancho - .012, alto - .012, '#1d1813', '#3a3025')
     t['velo'] = panel(g, (x, y), (ancho - .012, alto - .012), '#0b0907', .6, -.3)
     t['nombre'] = texto(g, '', (x, y + alto / 2 - .02), esc, CREMA)
     t['nombre'].z = -.4
@@ -1155,7 +1158,7 @@ def crear_detalle(padre, tab):
     d['rareza'] = texto(padre, '', (.3, .32), 1.0, GRIS, (-.5, .5))
     d['desc'] = texto(padre, '', (.3, .26), 1.0, CREMA, (-.5, .5))
     d['precio'] = texto(padre, '', (.3, .08), 1.3, ORO, (-.5, 0))
-    d['btn'] = boton(padre, ' ', (.58, -.03), lambda: accion_skin(tab), .5, .09, '#e8d82a', '#fff25a', '#14110d')
+    d['btn'] = boton(padre, '', (.58, -.03), lambda: accion_skin(tab), .5, .09, '#e8d82a', '#fff25a', '#14110d')
     d['puntos'] = texto(padre, '', (.3, -.14), 1.2, ORO, (-.5, 0))
     d['aviso'] = texto(padre, '', (.3, -.21), 1.0, '#e8472d', (-.5, 0))
     if tab == 'tienda':
